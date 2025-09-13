@@ -1,0 +1,49 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Pi BnW Cam</title>
+  <style>
+    body{font-family:system-ui,Segoe UI,Arial,sans-serif;max-width:720px;margin:24px auto;padding:0 16px}
+    button{padding:10px 16px;border:0;border-radius:10px;font-weight:600;cursor:pointer}
+    #captureBtn{background:#111;color:#fff}
+    #status{margin:12px 0;opacity:.8}
+    img{display:block;max-width:100%;height:auto;border-radius:12px;margin-top:12px}
+  </style>
+</head>
+<body>
+  <h1>Pi BnW Cam</h1>
+  <button id="captureBtn">📸 Capture BnW</button>
+  <div id="status"></div>
+  <img id="preview" alt="Last capture will appear here" />
+
+  <script>
+    const btn = document.getElementById("captureBtn");
+    const statusEl = document.getElementById("status");
+    const img = document.getElementById("preview");
+
+    async function capture() {
+      btn.disabled = true;
+      btn.textContent = "Capturing…";
+      statusEl.textContent = "Taking picture and converting to BnW…";
+
+      try {
+        const r = await fetch("/capture", { method: "POST" });
+        const data = await r.json();
+        if (!data.ok) throw new Error(data.error || "Unknown error");
+        img.src = data.url; // cache-busted URL from server
+        statusEl.textContent = "Done.";
+      } catch (e) {
+        console.error(e);
+        statusEl.textContent = "Failed to capture. Check server logs.";
+      } finally {
+        btn.disabled = false;
+        btn.textContent = "📸 Capture BnW";
+      }
+    }
+
+    btn.addEventListener("click", capture);
+  </script>
+</body>
+</html>
