@@ -8,42 +8,32 @@
     :root { --gap: 12px; }
     body{font-family:system-ui,Segoe UI,Arial,sans-serif;max-width:980px;margin:24px auto;padding:0 16px}
     h1{margin:0 0 12px}
-    .toolbar{display:flex;align-items:center;gap:10px;margin-bottom:10px}
+    .toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-bottom:10px}
     button{padding:10px 16px;border:0;border-radius:10px;font-weight:600;cursor:pointer}
     #captureBtn{background:#111;color:#fff}
-    #status{margin:4px 0 16px;opacity:.8;min-height:1em}
+    #uploadAllBtn{background:#0a7b1f;color:#fff}
+    #status{margin:4px 0 16px;opacity:.8;min-height:1.2em}
     .hero{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
     .hero img{width:100%;height:auto;border-radius:12px;display:block}
     .muted{opacity:.7;font-size:14px}
-
-    /* Gallery grid */
-    .gal-title{display:flex;align-items:center;gap:8px;margin:20px 0 8px}
-    .grid{
-      display:grid;
-      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
-      gap: var(--gap);
-    }
-    .card{
-      position:relative;
-      overflow:hidden;
-      border-radius:12px;
-      box-shadow:0 1px 4px rgba(0,0,0,.08);
-      background:#f7f7f8;
-      transition:transform .15s ease, box-shadow .15s ease;
-    }
+    .section{margin-top:24px}
+    .section h2{margin:0 0 8px}
+    .grid{display:grid;grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));gap: var(--gap);}
+    .card{position:relative;overflow:hidden;border-radius:12px;box-shadow:0 1px 4px rgba(0,0,0,.08);background:#f7f7f8;transition:transform .15s ease, box-shadow .15s ease}
     .card:hover{transform:translateY(-2px); box-shadow:0 6px 18px rgba(0,0,0,.12)}
     .thumb{width:100%;height:160px;object-fit:cover;display:block;filter:grayscale(100%) contrast(110%)}
     .meta{position:absolute;left:8px;bottom:6px;background:rgba(0,0,0,.6);color:#fff;font-size:12px;padding:2px 6px;border-radius:8px}
-
-    @media (max-width:720px){
-      .hero{grid-template-columns:1fr}
-    }
+    .badge{position:absolute;right:8px;top:8px;font-size:12px;padding:2px 6px;border-radius:8px;background:#0b63ce;color:#fff}
+    .actions{position:absolute;right:8px;bottom:8px;display:flex;gap:6px}
+    .tiny{font-size:12px;padding:6px 8px;border-radius:8px;border:0;background:#111;color:#fff;opacity:.9}
+    @media (max-width:720px){ .hero{grid-template-columns:1fr} }
   </style>
 </head>
 <body>
   <h1>Pi BnW Cam</h1>
   <div class="toolbar">
     <button id="captureBtn">📸 Capture BnW</button>
+    <button id="uploadAllBtn">⬆️ Upload to Arweave</button>
     <span id="status" class="muted"></span>
   </div>
 
@@ -53,33 +43,41 @@
       <div class="muted">Latest image (auto-refreshes)</div>
     </div>
     <div class="muted">
-      Tip: press the hardware button to capture, or use this button.<br/>
-      The gallery below shows all saved photos from <code>/images</code> (newest first).
+      Capture as usual. <b>No uploads</b> happen automatically.<br/>
+      Click “Upload to Arweave” to upload all local photos; uploaded files are <b>deleted from the Pi</b> and appear below under “Archived”.
     </div>
   </div>
 
-  <div class="gal-title"><h2 style="margin:0">Gallery</h2><span class="muted" id="count"></span></div>
-  <div id="grid" class="grid"></div>
+  <div class="section">
+    <h2>Local (not uploaded) <span class="muted" id="countLocal"></span></h2>
+    <div id="gridLocal" class="grid"></div>
+  </div>
+
+  <div class="section">
+    <h2>Archived on Arweave <span class="muted" id="countAr"></span></h2>
+    <div id="gridAr" class="grid"></div>
+  </div>
 
   <script>
     const btn = document.getElementById("captureBtn");
+    const uploadAllBtn = document.getElementById("uploadAllBtn");
     const statusEl = document.getElementById("status");
     const img = document.getElementById("preview");
-    const grid = document.getElementById("grid");
-    const countEl = document.getElementById("count");
+    const gridLocal = document.getElementById("gridLocal");
+    const gridAr = document.getElementById("gridAr");
+    const countLocal = document.getElementById("countLocal");
+    const countAr = document.getElementById("countAr");
 
     async function capture() {
       btn.disabled = true;
       btn.textContent = "Capturing…";
       statusEl.textContent = "Taking picture and converting…";
-
       try {
         const r = await fetch("/capture", { method: "POST" });
         const data = await r.json();
         if (!data.ok) throw new Error(data.error || "Unknown error");
-        img.src = data.url; // cache-busted latest
+        img.src = data.url;
         statusEl.textContent = "Done.";
-        // Refresh gallery after capture
         await refreshGallery();
       } catch (e) {
         console.error(e);
@@ -89,10 +87,28 @@
         btn.textContent = "📸 Capture BnW";
       }
     }
-
     btn.addEventListener("click", capture);
 
-    // SSE: update latest preview + refresh gallery on any capture (web or hardware)
+    async function uploadAll() {
+      uploadAllBtn.disabled = true;
+      uploadAllBtn.textContent = "Queueing…";
+      statusEl.textContent = "Queueing all local images for Arweave upload…";
+      try {
+        const r = await fetch("/upload-all", { method: "POST" });
+        const data = await r.json();
+        if (!data.ok) throw new Error(data.error || "Failed");
+        statusEl.textContent = `Queued ${data.queued} image(s). Uploads run in background.`;
+      } catch (e) {
+        console.error(e);
+        statusEl.textContent = e.message || "Failed to queue uploads.";
+      } finally {
+        uploadAllBtn.disabled = false;
+        uploadAllBtn.textContent = "⬆️ Upload to Arweave";
+      }
+    }
+    uploadAllBtn.addEventListener("click", uploadAll);
+
+    // SSE: captured -> refresh; uploaded -> refresh (moves from Local to Archived)
     const es = new EventSource("/events");
     es.onmessage = async (ev) => {
       try {
@@ -100,40 +116,51 @@
         if (msg.type === "captured") {
           img.src = "/latest.webp?ts=" + msg.ts;
           await refreshGallery();
+        } else if (msg.type === "uploaded") {
+          await refreshGallery();
         }
       } catch {}
     };
 
-    // Render helpers
     function fmtBytes(n){
+      if (n == null) return "";
       if (n < 1024) return n + " B";
       if (n < 1024*1024) return (n/1024).toFixed(1) + " KB";
       return (n/1024/1024).toFixed(2) + " MB";
     }
 
-    function renderGallery(items){
-      grid.innerHTML = "";
-      countEl.textContent = `(${items.length})`;
+    function renderLocal(items){
+      gridLocal.innerHTML = "";
+      countLocal.textContent = `(${items.length})`;
       for (const it of items){
-        const card = document.createElement("a");
-        card.className = "card";
-        card.href = it.url;
-        card.target = "_blank";
-        card.rel = "noopener";
-        const img = document.createElement("img");
-        img.className = "thumb";
-        img.loading = "lazy";
-        img.src = it.url;
-        img.alt = it.name;
-
-        const meta = document.createElement("div");
-        meta.className = "meta";
         const dt = new Date(it.mtimeMs);
-        meta.textContent = `${dt.toLocaleString()} · ${fmtBytes(it.size)}`;
+        const card = document.createElement("div");
+        card.className = "card";
+        card.innerHTML = `
+          <a href="${it.url}" target="_blank" rel="noopener">
+            <img class="thumb" loading="lazy" src="${it.url}" alt="${it.name}" />
+          </a>
+          <div class="meta">${dt.toLocaleString()} · ${fmtBytes(it.size)}</div>
+        `;
+        gridLocal.appendChild(card);
+      }
+    }
 
-        card.appendChild(img);
-        card.appendChild(meta);
-        grid.appendChild(card);
+    function renderArchived(items){
+      gridAr.innerHTML = "";
+      countAr.textContent = `(${items.length})`;
+      for (const it of items){
+        const when = it.uploadedAt ? new Date(it.uploadedAt).toLocaleString() : "";
+        const card = document.createElement("div");
+        card.className = "card";
+        card.innerHTML = `
+          <a href="${it.url}" target="_blank" rel="noopener">
+            <img class="thumb" loading="lazy" src="${it.url}" alt="${it.name}" />
+          </a>
+          <div class="meta">${when}${it.size ? " · " + fmtBytes(it.size) : ""}</div>
+          <a class="badge" href="${it.url}" target="_blank" rel="noopener">Arweave</a>
+        `;
+        gridAr.appendChild(card);
       }
     }
 
@@ -142,14 +169,14 @@
         const r = await fetch("/gallery.json");
         const data = await r.json();
         if (!data.ok) throw new Error("Gallery failed");
-        renderGallery(data.items);
+        renderLocal(data.local || []);
+        renderArchived(data.archived || []);
       }catch(e){
         console.error(e);
         statusEl.textContent = "Failed to load gallery.";
       }
     }
 
-    // Initial loads
     (async function init(){
       img.src = "/latest.webp?ts=" + Date.now();
       await refreshGallery();
