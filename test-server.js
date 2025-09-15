@@ -18,12 +18,75 @@ const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, "public");
 const OUTPUT_PATH = path.join(PUBLIC_DIR, "latest.webp");
 
-// Serve frontend; prevent caching for latest.webp
-app.use(express.static(PUBLIC_DIR, {
-  setHeaders: (res, filePath) => {
-    if (filePath.endsWith("latest.webp")) res.setHeader("Cache-Control", "no-store");
+// ---------- State (daily shots) ----------
+const STATE_PATH = path.join(__dirname, "state.json");
+const DAILY_LIMIT = 10;
+
+function todayLocalISODate() {
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const dd = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${dd}`; // local date (not UTC slice)
+}
+
+function defaultState() {
+  return { date: todayLocalISODate(), shotsRemaining: DAILY_LIMIT };
+}
+
+function readState() {
+  try {
+    const raw = fs.readFileSync(STATE_PATH, "utf8");
+    const obj = JSON.parse(raw);
+    if (
+      !obj ||
+      typeof obj !== "object" ||
+      typeof obj.date !== "string" ||
+      typeof obj.shotsRemaining !== "number"
+    ) {
+      throw new Error("Invalid state schema");
+    }
+    return obj;
+  } catch {
+    const s = defaultState();
+    writeState(s);
+    return s;
   }
-}));
+}
+
+function writeState(state) {
+  const tmp = STATE_PATH + ".tmp";
+  fs.writeFileSync(tmp, JSON.stringify(state, null, 2));
+  fs.renameSync(tmp, STATE_PATH);
+}
+
+function ensureToday(state) {
+  const t = todayLocalISODate();
+  if (state.date !== t) {
+    state.date = t;
+    state.shotsRemaining = DAILY_LIMIT;
+    writeState(state);
+  }
+}
+
+function canCapture(state) {
+  ensureToday(state);
+  return state.shotsRemaining > 0;
+}
+
+function decAndPersist(state) {
+  state.shotsRemaining = Math.max(0, state.shotsRemaining - 1);
+  writeState(state);
+}
+
+// Serve frontend; prevent caching for latest.webp
+app.use(
+  express.static(PUBLIC_DIR, {
+    setHeaders: (res, filePath) => {
+      if (filePath.endsWith("latest.webp")) res.setHeader("Cache-Control", "no-store");
+    },
+  })
+);
 
 // ---------- SSE: live updates ----------
 const clients = new Set();
@@ -40,7 +103,11 @@ app.get("/events", (req, res) => {
 });
 function notifyCaptured() {
   const payload = `data: ${JSON.stringify({ type: "captured", ts: Date.now() })}\n\n`;
-  for (const res of clients) { try { res.write(payload); } catch {} }
+  for (const res of clients) {
+    try {
+      res.write(payload);
+    } catch {}
+  }
 }
 
 // ------------- Capture pipeline -------------
@@ -71,7 +138,6 @@ function initOled() {
     oled = new Oled(oledBus, { width: 128, height: 64, address: 0x3c });
     oled.clearDisplay();
     oled.turnOnDisplay();
-    showStatus("Ready");
     return true;
   } catch (e) {
     console.error("OLED init failed:", e.message || e);
@@ -87,17 +153,36 @@ function showStatus(text) {
   oled.writeString(font, 1, text, 1, true);
 }
 
-function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+function sleep(ms) {
+  return new Promise((r) => setTimeout(r, ms));
+}
 
-// Shows a centered big digit while something else runs in parallel
+function showRemainingBig(n) {
+  if (!oled) return;
+  oled.clearDisplay();
+  // header
+  oled.setCursor(0, 0);
+  oled.writeString(font, 1, "Shots left", 1, true);
+  // big centered number
+  const s = String(n);
+  const size = 3;
+  const charW = 5 * size + 1;
+  const charH = 7 * size;
+  const x = Math.max(0, Math.floor((128 - charW * s.length) / 2));
+  const y = Math.max(0, Math.floor((64 - charH) / 2));
+  oled.setCursor(x, y);
+  oled.writeString(font, size, s, 1, true);
+}
+
 async function showActiveCountdown(seconds = 3) {
-  if (!oled) { await sleep(seconds * 1000); return; }
+  if (!oled) {
+    await sleep(seconds * 1000);
+    return;
+  }
   for (let s = seconds; s >= 1; s--) {
     oled.clearDisplay();
-    // header
     oled.setCursor(0, 0);
     oled.writeString(font, 1, "Hold steady…", 1, true);
-    // big number
     const big = String(s);
     const size = 3;
     const charW = 5 * size + 1;
@@ -108,29 +193,6 @@ async function showActiveCountdown(seconds = 3) {
     oled.writeString(font, size, big, 1, true);
     await sleep(1000);
   }
-}
-
-// Runs the whole UX: start capture now, show 3-2-1 while capturing,
-// then show "Processing..." for ~10s, then "Saved ✓"
-async function runCaptureWithUI() {
-  // Start capture immediately
-  const capPromise = captureImage();
-
-  // While capture is happening, show 3-2-1
-  await showActiveCountdown(3);
-
-  // Then show "Processing..." for ~10 seconds (regardless of when capture finishes)
-  showStatus("Processing...");
-  await sleep(10000);
-
-  // Ensure capture finished (if not already)
-  try { await capPromise; }
-  catch (e) { showStatus("Error"); throw e; }
-
-  // Final status
-  showResult(true);
-  notifyCaptured();
-  setTimeout(() => showStatus("Ready"), 800);
 }
 
 function showResult(ok, msg = "") {
@@ -148,6 +210,31 @@ function showResult(ok, msg = "") {
   }
 }
 
+// Runs the whole UX: start capture now, show 3-2-1 during capture,
+// then "Processing..." 10s, then "Saved ✓", update remaining on OLED
+async function runCaptureWithUI(state) {
+  // start capture immediately
+  const capPromise = captureImage();
+
+  // countdown while capture is ongoing
+  await showActiveCountdown(3);
+
+  // processing splash ~10s
+  showStatus("Processing...");
+  await sleep(10000);
+
+  // wait for capture if still running
+  await capPromise;
+
+  // decrement quota & persist
+  decAndPersist(state);
+
+  // final UI + notify + return to remaining
+  showResult(true);
+  notifyCaptured();
+  setTimeout(() => showRemainingBig(state.shotsRemaining), 800);
+}
+
 // ------------- Buttons via ALERT (no ISR interrupts) -------------
 let btnA; // GPIO17
 let btnB; // GPIO27
@@ -157,7 +244,7 @@ function initButtons() {
     btnA = new Gpio(17, { mode: Gpio.INPUT, pullUpDown: Gpio.PUD_UP });
     btnB = new Gpio(27, { mode: Gpio.INPUT, pullUpDown: Gpio.PUD_UP });
 
-    btnA.glitchFilter(10000); // 10 ms
+    btnA.glitchFilter(10000);
     btnB.glitchFilter(10000);
 
     btnA.enableAlert();
@@ -165,14 +252,29 @@ function initButtons() {
 
     btnA.on("alert", async (level) => {
       if (level !== 0) return; // pressed -> LOW
-      if (isBusy) { showStatus("Busy…"); return; }
+      if (isBusy) {
+        showStatus("Busy…");
+        return;
+      }
+
+      // load + roll date if needed
+      const state = readState();
+      ensureToday(state);
+
+      if (!canCapture(state)) {
+        // limit reached
+        showStatus("Limit reached");
+        setTimeout(() => showRemainingBig(state.shotsRemaining), 1500);
+        return;
+      }
+
       isBusy = true;
       try {
-        await runCaptureWithUI();
+        await runCaptureWithUI(state);
       } catch (e) {
         console.error("Button capture failed:", e.stderr || e.err || e);
         showResult(false, "Check camera");
-        setTimeout(() => showStatus("Ready"), 1500);
+        setTimeout(() => showRemainingBig(readState().shotsRemaining), 1500);
       } finally {
         isBusy = false;
       }
@@ -180,7 +282,7 @@ function initButtons() {
 
     btnB.on("alert", (level) => {
       if (level !== 0) return;
-      // Placeholder for future function
+      // Reserved for future feature
     });
 
     console.log("Buttons ready on GPIO17 (A) and GPIO27 (B) [ALERT mode].");
@@ -195,15 +297,24 @@ function initButtons() {
 app.post("/capture", async (_req, res) => {
   if (isBusy) return res.status(409).json({ ok: false, error: "Busy" });
 
+  const state = readState();
+  ensureToday(state);
+
+  if (!canCapture(state)) {
+    showStatus("Limit reached");
+    setTimeout(() => showRemainingBig(state.shotsRemaining), 1500);
+    return res.status(403).json({ ok: false, error: "Daily limit reached" });
+  }
+
   isBusy = true;
   try {
-    await runCaptureWithUI();
+    await runCaptureWithUI(state);
     const ts = Date.now();
     return res.json({ ok: true, url: `/latest.webp?ts=${ts}` });
   } catch (e) {
     console.error("Capture error:", e.stderr || e.err || e);
     showResult(false, "Capture failed");
-    setTimeout(() => showStatus("Ready"), 1500);
+    setTimeout(() => showRemainingBig(readState().shotsRemaining), 1500);
     return res.status(500).json({ ok: false, error: "Capture failed" });
   } finally {
     isBusy = false;
@@ -212,6 +323,11 @@ app.post("/capture", async (_req, res) => {
 
 // ------------- Startup -------------
 const oledOk = initOled();
+// initialize state file and show remaining on OLED at idle
+const bootState = readState();
+ensureToday(bootState);
+showRemainingBig(bootState.shotsRemaining);
+
 const buttonsOk = initButtons();
 
 app.listen(PORT, () => {
@@ -229,7 +345,9 @@ process.on("SIGINT", () => {
       if (oledBus) oledBus.closeSync();
     }
   } catch {}
-  try { if (btnA?.disableAlert) btnA.disableAlert(); } catch {}
-  try { if (btnB?.disableAlert) btnB.disableAlert(); } catch {}
+  try {
+    if (btnA?.disableAlert) btnA.disableAlert();
+    if (btnB?.disableAlert) btnB.disableAlert();
+  } catch {}
   process.exit(0);
 });
