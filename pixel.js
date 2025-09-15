@@ -1,4 +1,5 @@
-// server.js
+// pixel.js (or server.js)
+// Run: sudo -E node pixel.js
 const express = require("express");
 const { exec } = require("child_process");
 const path = require("path");
@@ -12,6 +13,14 @@ const { Gpio } = require("pigpio");
 const i2c = require("i2c-bus");
 const Oled = require("oled-i2c-bus");
 const font = require("oled-font-5x7");
+
+process.on("unhandledRejection", (reason) => {
+  console.error("UNHANDLED REJECTION:", reason);
+});
+process.on("uncaughtException", (err) => {
+  console.error("UNCAUGHT EXCEPTION:", err);
+  // Do not exit so the server keeps running; flip to process.exit(1) if you prefer a hard crash.
+});
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -85,7 +94,7 @@ function decAndPersist(state) {
   writeState(state);
 }
 
-// ---------- Arweave manifest + queue ----------
+// ---------- Arweave manifest (manual upload only) ----------
 const ARW_MANIFEST = path.join(ROOT_DIR, "arweave.json");
 function readManifest() {
   try {
@@ -131,10 +140,8 @@ async function ensureTurbo() {
 }
 function enqueueUpload(filename) {
   if (!filename) return;
-  // Skip if already success
   const entry = getManifestEntry(filename);
   if (entry && entry.status === "success") return;
-  // mark pending
   upsertManifestEntry(filename, { status: "pending", queuedAt: new Date().toISOString() });
   uploadQueue.push(filename);
   process.nextTick(processUploadQueue);
@@ -154,7 +161,6 @@ async function processUploadQueue() {
     const filename = uploadQueue.shift();
     const filePath = path.join(IMAGES_DIR, filename);
     try {
-      // If the file was already deleted (e.g., previous success), skip
       if (!fs.existsSync(filePath)) {
         const ent = getManifestEntry(filename);
         if (!ent || ent.status !== "success") {
@@ -162,7 +168,6 @@ async function processUploadQueue() {
         }
         continue;
       }
-
       const st = fs.statSync(filePath);
       const type = mime.lookup(filePath) || "application/octet-stream";
 
@@ -173,7 +178,6 @@ async function processUploadQueue() {
       });
 
       const url = `https://arweave.net/${result.id}`;
-      // Delete local file after success
       try { fs.unlinkSync(filePath); } catch {}
 
       upsertManifestEntry(filename, {
@@ -184,7 +188,6 @@ async function processUploadQueue() {
         size: st.size,
       });
 
-      // Notify clients: this file moved to Arweave (and is no longer local)
       broadcast({ type: "uploaded", filename, url, txId: result.id });
       console.log("Arweave:", filename, url);
     } catch (e) {
@@ -209,7 +212,7 @@ app.use(
 );
 app.use("/images", express.static(IMAGES_DIR, { maxAge: "1d" }));
 
-// Gallery split: local (from disk) + archived (from arweave.json with success)
+// Gallery split: local (disk) + archived (arweave)
 app.get("/gallery.json", async (_req, res) => {
   try {
     const names = (await fs.promises.readdir(IMAGES_DIR)).filter(n => n.toLowerCase().endsWith(".webp"));
@@ -272,17 +275,24 @@ function notifyCaptured(filename = null) {
   broadcast({ type: "captured", ts: Date.now(), filename });
 }
 
-// ---------- Capture pipeline ----------
+// ---------- Capture pipeline (with FIXES) ----------
 let isBusy = false;
 
+// FIX #1: reject with Error, not plain object
 function safeExec(cmd, opts = {}) {
   return new Promise((resolve, reject) => {
     exec(cmd, { timeout: 15000, ...opts }, (err, stdout, stderr) => {
-      if (err) reject({ err, stderr: String(stderr) });
-      else resolve({ stdout: String(stdout), stderr: String(stderr) });
+      if (err) {
+        const e = new Error(String(stderr || err.message || "exec failed"));
+        e.stderr = String(stderr || "");
+        e.cause = err;
+        return reject(e);
+      }
+      resolve({ stdout: String(stdout), stderr: String(stderr) });
     });
   });
 }
+
 async function captureImage() {
   const cmd = `rpicam-still -n -t 1 -o - | convert - -resize '1024x1024>' -colorspace Gray -auto-level -contrast-stretch 0.5%x0.5% -define webp:lossless=false -quality 80 -define webp:method=6 -define webp:target-size=100000 "${OUTPUT_PATH}"`;
   await safeExec(cmd);
@@ -291,9 +301,8 @@ async function captureImage() {
   return name;
 }
 
-// ---------- OLED + (twinkle idle) ----------
+// ---------- OLED + Twinkle idle ----------
 let oled = null, oledBus = null;
-let uiMode = "idle";
 let twinkleTimer = null, twinkleEnabled = false, stars = [];
 const FPS = 5, STAR_COUNT = 10, MOVE_EVERY_MS = 3000;
 let lastMoveAt = 0;
@@ -351,7 +360,6 @@ function showRemainingBig(n) {
 async function showActiveCountdown(seconds = 3) {
   if (!oled) { await sleep(seconds * 1000); return; }
   stopTwinkle();
-  uiMode = "countdown";
   for (let s = seconds; s >= 1; s--) {
     oled.clearDisplay();
     oled.setCursor(0, 0);
@@ -368,7 +376,6 @@ async function showActiveCountdown(seconds = 3) {
 function showResult(ok, msg = "") {
   if (!oled) return;
   stopTwinkle();
-  uiMode = ok ? "saved" : "error";
   oled.clearDisplay();
   oled.setCursor(0, 0);
   if (ok) {
@@ -384,7 +391,6 @@ function showResult(ok, msg = "") {
 function startTwinkle() {
   if (!oled || twinkleEnabled) return;
   twinkleEnabled = true;
-  uiMode = "idle";
   seedStars();
   lastMoveAt = Date.now();
 
@@ -421,20 +427,42 @@ function stopTwinkle() {
     try { oled.drawPixel(erase); oled.update(); } catch {}
   }
 }
-// Full capture UI flow (NO auto-upload here)
+
+// Full capture UI flow (NO auto-upload) with FIX #2 (self-catching capture promise)
 async function runCaptureWithUI(state) {
-  const capPromise = captureImage();
+  // Start capture immediately, but PREVENT unhandled rejection:
+  let capError = null;
+  const capPromise = captureImage().catch((e) => {
+    capError = e;   // store error so it won't crash as unhandled
+    return null;    // make the promise resolve -> prevents unhandled rejection
+  });
+
+  // Show countdown while capture runs
   await showActiveCountdown(3);
+
+  // Processing splash
   showStatus("Processing...");
   await sleep(10000);
-  const filename = await capPromise;
+
+  // Surface any capture error now (in the right UI place)
+  if (capError) {
+    showResult(false, "Capture error");
+    throw capError;
+  }
+
+  // capPromise has either resolved to filename or null; get the filename
+  const filename = await capPromise; // safe now
+
+  // Decrement quota & UI
   decAndPersist(state);
   showResult(true);
   notifyCaptured(filename);
+
   setTimeout(() => {
     const fresh = readState(); ensureToday(fresh);
     showRemainingBig(fresh.shotsRemaining);
   }, 800);
+
   return filename;
 }
 
@@ -454,8 +482,11 @@ function initButtons() {
       if (!canCapture(state)) { showStatus("Limit reached"); setTimeout(() => showRemainingBig(state.shotsRemaining), 1500); return; }
       isBusy = true;
       try { await runCaptureWithUI(state); }
-      catch (e) { console.error("Button capture failed:", e?.stderr || e); showResult(false, "Check camera"); setTimeout(() => showRemainingBig(readState().shotsRemaining), 1500); }
-      finally { isBusy = false; }
+      catch (e) {
+        console.error("Button capture failed:", e?.stderr || e);
+        showResult(false, "Check camera");
+        setTimeout(() => showRemainingBig(readState().shotsRemaining), 1500);
+      } finally { isBusy = false; }
     });
 
     // Button B reserved for future actions
@@ -491,7 +522,7 @@ app.post("/capture", async (_req, res) => {
   }
 });
 
-// Upload ALL local images (manual). Each success deletes local file.
+// Manual upload ALL local images (each success deletes local file)
 app.post("/upload-all", async (_req, res) => {
   try {
     const names = (await fs.promises.readdir(IMAGES_DIR)).filter(n => n.toLowerCase().endsWith(".webp"));
@@ -503,7 +534,7 @@ app.post("/upload-all", async (_req, res) => {
   }
 });
 
-// Optional: retry a specific filename (if you ever want it)
+// Optional: retry a specific filename
 app.post("/upload/:filename", async (req, res) => {
   try {
     const filename = decodeURIComponent(req.params.filename);
