@@ -18,19 +18,15 @@ const PORT = process.env.PORT || 3000;
 const PUBLIC_DIR = path.join(__dirname, "public");
 const OUTPUT_PATH = path.join(PUBLIC_DIR, "latest.webp");
 
-// Serve the frontend (public/index.html, latest.webp, etc.)
-// Add no-store just for latest.webp as a safety net (we still cache-bust with ?ts=)
+// Serve frontend; prevent caching for latest.webp
 app.use(express.static(PUBLIC_DIR, {
   setHeaders: (res, filePath) => {
-    if (filePath.endsWith("latest.webp")) {
-      res.setHeader("Cache-Control", "no-store");
-    }
+    if (filePath.endsWith("latest.webp")) res.setHeader("Cache-Control", "no-store");
   }
 }));
 
-// ---------- SSE: live updates to clients ----------
+// ---------- SSE: live updates ----------
 const clients = new Set();
-
 app.get("/events", (req, res) => {
   res.set({
     "Content-Type": "text/event-stream",
@@ -38,29 +34,23 @@ app.get("/events", (req, res) => {
     "Connection": "keep-alive",
   });
   res.flushHeaders();
-  res.write("retry: 2000\n\n"); // optional: reconnection hint
+  res.write("retry: 2000\n\n");
   clients.add(res);
   req.on("close", () => clients.delete(res));
 });
-
 function notifyCaptured() {
   const payload = `data: ${JSON.stringify({ type: "captured", ts: Date.now() })}\n\n`;
-  for (const res of clients) {
-    try { res.write(payload); } catch {}
-  }
+  for (const res of clients) { try { res.write(payload); } catch {} }
 }
 
-// ------------- Capture pipeline (shared by route + button) -------------
+// ------------- Capture pipeline -------------
 let isBusy = false;
 
 function safeExec(cmd, opts = {}) {
   return new Promise((resolve, reject) => {
     exec(cmd, { timeout: 15000, ...opts }, (err, stdout, stderr) => {
-      if (err) {
-        reject({ err, stderr: String(stderr) });
-      } else {
-        resolve({ stdout: String(stdout), stderr: String(stderr) });
-      }
+      if (err) reject({ err, stderr: String(stderr) });
+      else resolve({ stdout: String(stdout), stderr: String(stderr) });
     });
   });
 }
@@ -97,13 +87,17 @@ function showStatus(text) {
   oled.writeString(font, 1, text, 1, true);
 }
 
-async function showCountdown(seconds = 3) {
-  if (!oled) return;
+function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
+
+// Shows a centered big digit while something else runs in parallel
+async function showActiveCountdown(seconds = 3) {
+  if (!oled) { await sleep(seconds * 1000); return; }
   for (let s = seconds; s >= 1; s--) {
     oled.clearDisplay();
+    // header
     oled.setCursor(0, 0);
     oled.writeString(font, 1, "Hold steady…", 1, true);
-
+    // big number
     const big = String(s);
     const size = 3;
     const charW = 5 * size + 1;
@@ -112,12 +106,31 @@ async function showCountdown(seconds = 3) {
     const y = Math.max(0, Math.floor((64 - charH) / 2));
     oled.setCursor(x, y);
     oled.writeString(font, size, big, 1, true);
-
-    await new Promise((r) => setTimeout(r, 1000));
+    await sleep(1000);
   }
-  oled.clearDisplay();
-  oled.setCursor(0, 0);
-  oled.writeString(font, 1, "Capturing...", 1, true);
+}
+
+// Runs the whole UX: start capture now, show 3-2-1 while capturing,
+// then show "Processing..." for ~10s, then "Saved ✓"
+async function runCaptureWithUI() {
+  // Start capture immediately
+  const capPromise = captureImage();
+
+  // While capture is happening, show 3-2-1
+  await showActiveCountdown(3);
+
+  // Then show "Processing..." for ~10 seconds (regardless of when capture finishes)
+  showStatus("Processing...");
+  await sleep(10000);
+
+  // Ensure capture finished (if not already)
+  try { await capPromise; }
+  catch (e) { showStatus("Error"); throw e; }
+
+  // Final status
+  showResult(true);
+  notifyCaptured();
+  setTimeout(() => showStatus("Ready"), 800);
 }
 
 function showResult(ok, msg = "") {
@@ -150,29 +163,24 @@ function initButtons() {
     btnA.enableAlert();
     btnB.enableAlert();
 
-    btnA.on("alert", async (level /*0=LOW,1=HIGH*/) => {
+    btnA.on("alert", async (level) => {
       if (level !== 0) return; // pressed -> LOW
-      console.log("Button A pressed (GPIO17)");
       if (isBusy) { showStatus("Busy…"); return; }
-
       isBusy = true;
       try {
-        await showCountdown(3);
-        await captureImage();
-        showResult(true);
-        notifyCaptured(); // <-- tell the browser(s) immediately
+        await runCaptureWithUI();
       } catch (e) {
         console.error("Button capture failed:", e.stderr || e.err || e);
         showResult(false, "Check camera");
+        setTimeout(() => showStatus("Ready"), 1500);
       } finally {
-        setTimeout(() => { showStatus("Ready"); isBusy = false; }, 1200);
+        isBusy = false;
       }
     });
 
     btnB.on("alert", (level) => {
       if (level !== 0) return;
-      console.log("Button B pressed (GPIO27)");
-      // Add future action here if needed
+      // Placeholder for future function
     });
 
     console.log("Buttons ready on GPIO17 (A) and GPIO27 (B) [ALERT mode].");
@@ -185,20 +193,13 @@ function initButtons() {
 
 // ------------- HTTP route -------------
 app.post("/capture", async (_req, res) => {
-  if (isBusy) {
-    return res.status(409).json({ ok: false, error: "Busy" });
-  }
+  if (isBusy) return res.status(409).json({ ok: false, error: "Busy" });
 
   isBusy = true;
   try {
-    await showCountdown(3);
-    await captureImage();
+    await runCaptureWithUI();
     const ts = Date.now();
-    const url = `/latest.webp?ts=${ts}`;
-    showResult(true);
-    notifyCaptured(); // <-- notify web clients too
-    setTimeout(() => showStatus("Ready"), 800);
-    return res.json({ ok: true, url });
+    return res.json({ ok: true, url: `/latest.webp?ts=${ts}` });
   } catch (e) {
     console.error("Capture error:", e.stderr || e.err || e);
     showResult(false, "Capture failed");
