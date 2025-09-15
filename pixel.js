@@ -116,28 +116,47 @@ async function captureImage() {
   return safeExec(cmd);
 }
 
-// ------------- OLED helpers + Orbit Animation -------------
+// ------------- OLED helpers + Twinkle animation -------------
 let oled = null;
 let oledBus = null;
 
-// Simple UI mode flag to pause/resume animation
 let uiMode = "idle"; // 'idle' | 'countdown' | 'processing' | 'saved' | 'error'
 
-// Orbit state
-let orbitTimer = null;
-let orbitEnabled = false;
-let orbitIdx = 0;
-let orbitCenter = { x: 64, y: 32 };
-let lastPixel = null;
+// Twinkle state
+let twinkleTimer = null;
+let twinkleEnabled = false;
+let stars = [];
+const FPS = 5;                 // gentle, low CPU
+const STAR_COUNT = 10;         // total stars across both boxes
+const MOVE_EVERY_MS = 3000;    // refresh a few stars every ~3s
+let lastMoveAt = 0;
 
-// Precompute orbit steps (low CPU): 32 steps around a circle
-const ORBIT_STEPS = 32;
-const ORBIT_RADIUS = 12; // pixel radius around the number
-const TWO_PI = Math.PI * 2;
-const orbitTable = Array.from({ length: ORBIT_STEPS }, (_, i) => {
-  const a = (i / ORBIT_STEPS) * TWO_PI;
-  return { cx: Math.cos(a), sy: Math.sin(a) };
-});
+// Two safe animation boxes: top-right & bottom-left (avoid big number area)
+const BOXES = [
+  // top-right 24x16
+  { x0: 104, y0: 0, x1: 127, y1: 15 },
+  // bottom-left 28x16
+  { x0: 0, y0: 48, x1: 27, y1: 63 },
+];
+
+function randInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+
+function randomPointInBox(b) {
+  return { x: randInt(b.x0, b.x1), y: randInt(b.y0, b.y1) };
+}
+
+function seedStars() {
+  stars = [];
+  for (let i = 0; i < STAR_COUNT; i++) {
+    const box = BOXES[i % BOXES.length];
+    const p = randomPointInBox(box);
+    stars.push({
+      x: p.x,
+      y: p.y,
+      on: Math.random() < 0.5,
+    });
+  }
+}
 
 function initOled() {
   try {
@@ -155,7 +174,7 @@ function initOled() {
 
 function showStatus(text) {
   if (!oled) return;
-  stopOrbit();
+  stopTwinkle();
   oled.clearDisplay();
   oled.setCursor(0, 0);
   oled.writeString(font, 1, text, 1, true);
@@ -165,12 +184,11 @@ function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
 function showRemainingBig(n) {
   if (!oled) return;
-  stopOrbit(); // draw static first
+  stopTwinkle(); // draw static UI first
   oled.clearDisplay();
-  // header
   oled.setCursor(0, 0);
   oled.writeString(font, 1, "Shots left", 1, true);
-  // big centered number
+
   const s = String(n);
   const size = 3;
   const charW = 5 * size + 1;
@@ -181,15 +199,13 @@ function showRemainingBig(n) {
   oled.setCursor(x, y);
   oled.writeString(font, size, s, 1, true);
 
-  // Set orbit center roughly at the middle of the big number block
-  orbitCenter = { x: Math.round(x + totalW / 2), y: Math.round(y + charH / 2) };
-  startOrbit(); // resume idle animation
+  startTwinkle(); // resume idle animation
 }
 
 // Countdown during active capture
 async function showActiveCountdown(seconds = 3) {
   if (!oled) { await sleep(seconds * 1000); return; }
-  stopOrbit();
+  stopTwinkle();
   uiMode = "countdown";
   for (let s = seconds; s >= 1; s--) {
     oled.clearDisplay();
@@ -209,7 +225,7 @@ async function showActiveCountdown(seconds = 3) {
 
 function showResult(ok, msg = "") {
   if (!oled) return;
-  stopOrbit();
+  stopTwinkle();
   uiMode = ok ? "saved" : "error";
   oled.clearDisplay();
   oled.setCursor(0, 0);
@@ -224,63 +240,69 @@ function showResult(ok, msg = "") {
   }
 }
 
-// Orbit control
-function startOrbit() {
-  if (!oled) return;
-  if (orbitEnabled) return; // already running
-  orbitEnabled = true;
+// Twinkle control
+function startTwinkle() {
+  if (!oled || twinkleEnabled) return;
+  twinkleEnabled = true;
   uiMode = "idle";
+  seedStars();
+  lastMoveAt = Date.now();
 
-  // clear last pixel memory
-  if (lastPixel) {
-    // erase just in case
-    try { oled.drawPixel([[lastPixel.x, lastPixel.y, 0]]); oled.update(); } catch {}
-    lastPixel = null;
-  }
+  if (twinkleTimer) clearInterval(twinkleTimer);
+  twinkleTimer = setInterval(() => {
+    if (!twinkleEnabled || !oled) return;
 
-  if (orbitTimer) clearInterval(orbitTimer);
-  orbitTimer = setInterval(() => {
-    if (!orbitEnabled || !oled) return;
+    // Flip some stars on/off
+    const toDraw = [];
+    for (const star of stars) {
+      // erase previous state
+      toDraw.push([star.x, star.y, 0]);
 
-    // erase last pixel
-    if (lastPixel) {
-      try { oled.drawPixel([[lastPixel.x, lastPixel.y, 0]]); } catch {}
+      // 50% chance to toggle each frame (soft flicker)
+      if (Math.random() < 0.5) star.on = !star.on;
+
+      // draw new state
+      if (star.on) toDraw.push([star.x, star.y, 1]);
     }
 
-    // compute next pixel
-    const step = orbitTable[orbitIdx];
-    let px = Math.round(orbitCenter.x + ORBIT_RADIUS * step.cx);
-    let py = Math.round(orbitCenter.y + ORBIT_RADIUS * step.sy);
+    // Occasionally move a couple of stars to fresh spots
+    const now = Date.now();
+    if (now - lastMoveAt > MOVE_EVERY_MS) {
+      lastMoveAt = now;
+      const moves = Math.max(1, Math.round(STAR_COUNT * 0.2)); // ~20% relocate
+      for (let i = 0; i < moves; i++) {
+        const idx = randInt(0, stars.length - 1);
+        const box = BOXES[idx % BOXES.length];
+        const p = randomPointInBox(box);
+        // erase old pixel (already in toDraw as 0), set new coords, ensure visible next frame
+        stars[idx].x = p.x;
+        stars[idx].y = p.y;
+        stars[idx].on = true;
+        toDraw.push([p.x, p.y, 1]);
+      }
+    }
 
-    // clamp to screen bounds
-    px = Math.max(0, Math.min(127, px));
-    py = Math.max(0, Math.min(63, py));
-
-    // draw new pixel
-    try { oled.drawPixel([[px, py, 1]]); } catch {}
+    try { oled.drawPixel(toDraw); } catch {}
     try { oled.update(); } catch {}
-
-    lastPixel = { x: px, y: py };
-    orbitIdx = (orbitIdx + 1) % ORBIT_STEPS;
-  }, 100); // ~10 FPS
+  }, 1000 / FPS);
 }
 
-function stopOrbit() {
-  orbitEnabled = false;
-  if (orbitTimer) {
-    clearInterval(orbitTimer);
-    orbitTimer = null;
+function stopTwinkle() {
+  twinkleEnabled = false;
+  if (twinkleTimer) {
+    clearInterval(twinkleTimer);
+    twinkleTimer = null;
   }
-  if (oled && lastPixel) {
-    try { oled.drawPixel([[lastPixel.x, lastPixel.y, 0]]); oled.update(); } catch {}
-    lastPixel = null;
+  if (oled && stars && stars.length) {
+    // Clear any lit stars
+    const erase = stars.map(s => [s.x, s.y, 0]);
+    try { oled.drawPixel(erase); oled.update(); } catch {}
   }
 }
 
 // Runs the whole UX: start capture now, show 3-2-1 during capture,
-// then "Processing..." 10s, then "Saved ✓", update remaining + resume orbit
+// then "Processing..." 10s, then "Saved ✓", update remaining + resume twinkle
 async function runCaptureWithUI(state) {
-  // start capture immediately (in parallel with countdown)
   const capPromise = captureImage();
 
   await showActiveCountdown(3);
@@ -291,16 +313,14 @@ async function runCaptureWithUI(state) {
 
   await capPromise;
 
-  // decrement quota & persist
   decAndPersist(state);
 
-  // final UI + notify + return to remaining (with orbit)
   showResult(true);
   notifyCaptured();
   setTimeout(() => {
     const fresh = readState();
     ensureToday(fresh);
-    showRemainingBig(fresh.shotsRemaining); // this restarts orbit
+    showRemainingBig(fresh.shotsRemaining); // restarts twinkle
   }, 800);
 }
 
@@ -346,7 +366,7 @@ function initButtons() {
 
     btnB.on("alert", (level) => {
       if (level !== 0) return;
-      // Reserved for future feature (e.g., show IP / toggle mode)
+      // Reserved for future feature
     });
 
     console.log("Buttons ready on GPIO17 (A) and GPIO27 (B) [ALERT mode].");
@@ -389,7 +409,7 @@ app.post("/capture", async (_req, res) => {
 const oledOk = initOled();
 const bootState = readState();
 ensureToday(bootState);
-showRemainingBig(bootState.shotsRemaining); // draws big count + starts orbit
+showRemainingBig(bootState.shotsRemaining); // draws big count + starts twinkle
 const buttonsOk = initButtons();
 
 app.listen(PORT, () => {
@@ -401,7 +421,7 @@ app.listen(PORT, () => {
 // ------------- Cleanup -------------
 process.on("SIGINT", () => {
   try {
-    stopOrbit();
+    stopTwinkle();
     if (oled) {
       oled.clearDisplay();
       oled.turnOffDisplay();
