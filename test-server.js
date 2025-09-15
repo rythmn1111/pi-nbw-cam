@@ -19,7 +19,36 @@ const PUBLIC_DIR = path.join(__dirname, "public");
 const OUTPUT_PATH = path.join(PUBLIC_DIR, "latest.webp");
 
 // Serve the frontend (public/index.html, latest.webp, etc.)
-app.use(express.static(PUBLIC_DIR));
+// Add no-store just for latest.webp as a safety net (we still cache-bust with ?ts=)
+app.use(express.static(PUBLIC_DIR, {
+  setHeaders: (res, filePath) => {
+    if (filePath.endsWith("latest.webp")) {
+      res.setHeader("Cache-Control", "no-store");
+    }
+  }
+}));
+
+// ---------- SSE: live updates to clients ----------
+const clients = new Set();
+
+app.get("/events", (req, res) => {
+  res.set({
+    "Content-Type": "text/event-stream",
+    "Cache-Control": "no-store",
+    "Connection": "keep-alive",
+  });
+  res.flushHeaders();
+  res.write("retry: 2000\n\n"); // optional: reconnection hint
+  clients.add(res);
+  req.on("close", () => clients.delete(res));
+});
+
+function notifyCaptured() {
+  const payload = `data: ${JSON.stringify({ type: "captured", ts: Date.now() })}\n\n`;
+  for (const res of clients) {
+    try { res.write(payload); } catch {}
+  }
+}
 
 // ------------- Capture pipeline (shared by route + button) -------------
 let isBusy = false;
@@ -38,9 +67,7 @@ function safeExec(cmd, opts = {}) {
 
 async function captureImage() {
   fs.mkdirSync(PUBLIC_DIR, { recursive: true });
-
   const cmd = `rpicam-still -n -t 1 -o - | convert - -resize '1024x1024>' -colorspace Gray -auto-level -contrast-stretch 0.5%x0.5% -define webp:lossless=false -quality 80 -define webp:method=6 -define webp:target-size=100000 "${OUTPUT_PATH}"`;
-
   return safeExec(cmd);
 }
 
@@ -114,46 +141,38 @@ let btnB; // GPIO27
 
 function initButtons() {
   try {
-    // Configure as inputs with internal pull-ups
     btnA = new Gpio(17, { mode: Gpio.INPUT, pullUpDown: Gpio.PUD_UP });
     btnB = new Gpio(27, { mode: Gpio.INPUT, pullUpDown: Gpio.PUD_UP });
 
-    // Debounce: ignore pulses shorter than 10 ms
-    btnA.glitchFilter(10000);
+    btnA.glitchFilter(10000); // 10 ms
     btnB.glitchFilter(10000);
 
-    // Enable alert callbacks (fires on any level change)
     btnA.enableAlert();
     btnB.enableAlert();
 
-    btnA.on("alert", async (level /* 0=LOW, 1=HIGH */, tick) => {
-      // Button wired to GND: press = LOW (0)
-      if (level !== 0) return;
+    btnA.on("alert", async (level /*0=LOW,1=HIGH*/) => {
+      if (level !== 0) return; // pressed -> LOW
       console.log("Button A pressed (GPIO17)");
-      if (isBusy) {
-        showStatus("Busy…");
-        return;
-      }
+      if (isBusy) { showStatus("Busy…"); return; }
+
       isBusy = true;
       try {
         await showCountdown(3);
         await captureImage();
         showResult(true);
+        notifyCaptured(); // <-- tell the browser(s) immediately
       } catch (e) {
         console.error("Button capture failed:", e.stderr || e.err || e);
         showResult(false, "Check camera");
       } finally {
-        setTimeout(() => {
-          showStatus("Ready");
-          isBusy = false;
-        }, 1200);
+        setTimeout(() => { showStatus("Ready"); isBusy = false; }, 1200);
       }
     });
 
     btnB.on("alert", (level) => {
       if (level !== 0) return;
       console.log("Button B pressed (GPIO27)");
-      // Placeholder: add a feature here later (e.g., toggle mode)
+      // Add future action here if needed
     });
 
     console.log("Buttons ready on GPIO17 (A) and GPIO27 (B) [ALERT mode].");
@@ -174,13 +193,15 @@ app.post("/capture", async (_req, res) => {
   try {
     await showCountdown(3);
     await captureImage();
-    const url = `/latest.webp?ts=${Date.now()}`;
+    const ts = Date.now();
+    const url = `/latest.webp?ts=${ts}`;
     showResult(true);
+    notifyCaptured(); // <-- notify web clients too
     setTimeout(() => showStatus("Ready"), 800);
     return res.json({ ok: true, url });
   } catch (e) {
     console.error("Capture error:", e.stderr || e.err || e);
-    showResult(false, "Check camera");
+    showResult(false, "Capture failed");
     setTimeout(() => showStatus("Ready"), 1500);
     return res.status(500).json({ ok: false, error: "Capture failed" });
   } finally {
@@ -207,7 +228,6 @@ process.on("SIGINT", () => {
       if (oledBus) oledBus.closeSync();
     }
   } catch {}
-  // Alerts don’t need disabling, but be tidy
   try { if (btnA?.disableAlert) btnA.disableAlert(); } catch {}
   try { if (btnB?.disableAlert) btnB.disableAlert(); } catch {}
   process.exit(0);

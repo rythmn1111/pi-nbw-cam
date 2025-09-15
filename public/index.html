@@ -44,6 +44,18 @@
     }
 
     btn.addEventListener("click", capture);
+    const es = new EventSource("/events");
+    es.onmessage = (ev) => {
+      try {
+        const msg = JSON.parse(ev.data);
+      if (msg.type === "captured") {
+        img.src = "/latest.webp?ts=" + msg.ts; // cache-busted
+      }
+    } catch (e) {
+      console.warn("SSE parse error", e);
+    }
+  };
   </script>
+  
 </body>
 </html>
