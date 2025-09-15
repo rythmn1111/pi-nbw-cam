@@ -37,10 +37,8 @@ function safeExec(cmd, opts = {}) {
 }
 
 async function captureImage() {
-  // Ensure output dir exists
   fs.mkdirSync(PUBLIC_DIR, { recursive: true });
 
-  // Same pipeline you already use
   const cmd = `rpicam-still -n -t 1 -o - | convert - -resize '1024x1024>' -colorspace Gray -auto-level -contrast-stretch 0.5%x0.5% -define webp:lossless=false -quality 80 -define webp:method=6 -define webp:target-size=100000 "${OUTPUT_PATH}"`;
 
   return safeExec(cmd);
@@ -52,12 +50,8 @@ let oledBus = null;
 
 function initOled() {
   try {
-    oledBus = i2c.openSync(1); // I²C bus 1
-    oled = new Oled(oledBus, {
-      width: 128,
-      height: 64,
-      address: 0x3c, // your i2cdetect shows 0x3c
-    });
+    oledBus = i2c.openSync(1);
+    oled = new Oled(oledBus, { width: 128, height: 64, address: 0x3c });
     oled.clearDisplay();
     oled.turnOnDisplay();
     showStatus("Ready");
@@ -80,16 +74,13 @@ async function showCountdown(seconds = 3) {
   if (!oled) return;
   for (let s = seconds; s >= 1; s--) {
     oled.clearDisplay();
-
-    // Small header
     oled.setCursor(0, 0);
     oled.writeString(font, 1, "Hold steady…", 1, true);
 
-    // Big number centered (size=3)
     const big = String(s);
     const size = 3;
-    const charW = 5 * size + 1; // approx width per char
-    const charH = 7 * size;     // approx height per char
+    const charW = 5 * size + 1;
+    const charH = 7 * size;
     const x = Math.max(0, Math.floor((128 - charW) / 2));
     const y = Math.max(0, Math.floor((64 - charH) / 2));
     oled.setCursor(x, y);
@@ -97,7 +88,6 @@ async function showCountdown(seconds = 3) {
 
     await new Promise((r) => setTimeout(r, 1000));
   }
-  // Optional: brief "Capturing..." splash
   oled.clearDisplay();
   oled.setCursor(0, 0);
   oled.writeString(font, 1, "Capturing...", 1, true);
@@ -118,31 +108,32 @@ function showResult(ok, msg = "") {
   }
 }
 
-// ------------- Button wiring (GPIO17 = capture) -------------
+// ------------- Buttons via ALERT (no ISR interrupts) -------------
 let btnA; // GPIO17
-let btnB; // GPIO27 (reserved)
+let btnB; // GPIO27
 
 function initButtons() {
   try {
-    // Buttons wired to GND -> use internal pull-ups
-    // Use edge interrupts (falling edge = press) and a short glitch filter
-    btnA = new Gpio(17, {
-      mode: Gpio.INPUT,
-      pullUpDown: Gpio.PUD_UP,
-      edge: Gpio.FALLING_EDGE,
-    });
-    btnA.glitchFilter(10000); // 10 ms
+    // Configure as inputs with internal pull-ups
+    btnA = new Gpio(17, { mode: Gpio.INPUT, pullUpDown: Gpio.PUD_UP });
+    btnB = new Gpio(27, { mode: Gpio.INPUT, pullUpDown: Gpio.PUD_UP });
 
-    btnA.on("interrupt", async (level /*0/1*/) => {
-      // For FALLING_EDGE, level will be 0 on press
+    // Debounce: ignore pulses shorter than 10 ms
+    btnA.glitchFilter(10000);
+    btnB.glitchFilter(10000);
+
+    // Enable alert callbacks (fires on any level change)
+    btnA.enableAlert();
+    btnB.enableAlert();
+
+    btnA.on("alert", async (level /* 0=LOW, 1=HIGH */, tick) => {
+      // Button wired to GND: press = LOW (0)
       if (level !== 0) return;
       console.log("Button A pressed (GPIO17)");
-
       if (isBusy) {
         showStatus("Busy…");
         return;
       }
-
       isBusy = true;
       try {
         await showCountdown(3);
@@ -159,20 +150,13 @@ function initButtons() {
       }
     });
 
-    // Reserve a second button (same config)
-    btnB = new Gpio(27, {
-      mode: Gpio.INPUT,
-      pullUpDown: Gpio.PUD_UP,
-      edge: Gpio.FALLING_EDGE,
-    });
-    btnB.glitchFilter(10000);
-    btnB.on("interrupt", (level) => {
+    btnB.on("alert", (level) => {
       if (level !== 0) return;
       console.log("Button B pressed (GPIO27)");
-      // Add any action for B here later
+      // Placeholder: add a feature here later (e.g., toggle mode)
     });
 
-    console.log("Buttons ready on GPIO17 (A) and GPIO27 (B).");
+    console.log("Buttons ready on GPIO17 (A) and GPIO27 (B) [ALERT mode].");
     return true;
   } catch (e) {
     console.error("Button init failed:", e.message || e);
@@ -188,7 +172,6 @@ app.post("/capture", async (_req, res) => {
 
   isBusy = true;
   try {
-    // Mirror the OLED UX for web captures
     await showCountdown(3);
     await captureImage();
     const url = `/latest.webp?ts=${Date.now()}`;
@@ -224,7 +207,8 @@ process.on("SIGINT", () => {
       if (oledBus) oledBus.closeSync();
     }
   } catch {}
-  try { if (btnA) btnA.disableAlert && btnA.disableAlert(); } catch {}
-  try { if (btnB) btnB.disableAlert && btnB.disableAlert(); } catch {}
+  // Alerts don’t need disabling, but be tidy
+  try { if (btnA?.disableAlert) btnA.disableAlert(); } catch {}
+  try { if (btnB?.disableAlert) btnB.disableAlert(); } catch {}
   process.exit(0);
 });
