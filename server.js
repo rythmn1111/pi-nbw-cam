@@ -22,7 +22,7 @@ app.post("/capture", async (_req, res) => {
     // Take a shot to stdout, pipe to ImageMagick to make grayscale WEBP under ~100KB, save to public/latest.webp
     // -n = no preview, -t 1 ~ minimal delay
     // Resize long edge to max 1024 to help stay under 100KB, then target WEBP size
-    const cmd = `rpicam-still -n -t 1 -o - | convert - -resize 1024x1024\> -colorspace Gray -auto-level -contrast-stretch 0.5%x0.5% -define webp:lossless=false -quality 80 -define webp:method=6 -define webp:target-size=100000 "${OUTPUT_PATH}"`;
+    const cmd = `rpicam-still -n -t 1 -o - | convert - -resize '1024x1024>' -colorspace Gray -auto-level -contrast-stretch 0.5%x0.5% -define webp:lossless=false -quality 80 -define webp:method=6 -define webp:target-size=100000 "${OUTPUT_PATH}"`;
 
     exec(cmd, { timeout: 15000 }, (err, stdout, stderr) => {
       if (err) {
