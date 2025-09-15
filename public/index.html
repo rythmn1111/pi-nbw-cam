@@ -5,38 +5,85 @@
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Pi BnW Cam</title>
   <style>
-    body{font-family:system-ui,Segoe UI,Arial,sans-serif;max-width:720px;margin:24px auto;padding:0 16px}
+    :root { --gap: 12px; }
+    body{font-family:system-ui,Segoe UI,Arial,sans-serif;max-width:980px;margin:24px auto;padding:0 16px}
+    h1{margin:0 0 12px}
+    .toolbar{display:flex;align-items:center;gap:10px;margin-bottom:10px}
     button{padding:10px 16px;border:0;border-radius:10px;font-weight:600;cursor:pointer}
     #captureBtn{background:#111;color:#fff}
-    #status{margin:12px 0;opacity:.8}
-    img{display:block;max-width:100%;height:auto;border-radius:12px;margin-top:12px}
+    #status{margin:4px 0 16px;opacity:.8;min-height:1em}
+    .hero{display:grid;grid-template-columns:1fr 1fr;gap:16px;align-items:start}
+    .hero img{width:100%;height:auto;border-radius:12px;display:block}
+    .muted{opacity:.7;font-size:14px}
+
+    /* Gallery grid */
+    .gal-title{display:flex;align-items:center;gap:8px;margin:20px 0 8px}
+    .grid{
+      display:grid;
+      grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+      gap: var(--gap);
+    }
+    .card{
+      position:relative;
+      overflow:hidden;
+      border-radius:12px;
+      box-shadow:0 1px 4px rgba(0,0,0,.08);
+      background:#f7f7f8;
+      transition:transform .15s ease, box-shadow .15s ease;
+    }
+    .card:hover{transform:translateY(-2px); box-shadow:0 6px 18px rgba(0,0,0,.12)}
+    .thumb{width:100%;height:160px;object-fit:cover;display:block;filter:grayscale(100%) contrast(110%)}
+    .meta{position:absolute;left:8px;bottom:6px;background:rgba(0,0,0,.6);color:#fff;font-size:12px;padding:2px 6px;border-radius:8px}
+
+    @media (max-width:720px){
+      .hero{grid-template-columns:1fr}
+    }
   </style>
 </head>
 <body>
   <h1>Pi BnW Cam</h1>
-  <button id="captureBtn">📸 Capture BnW</button>
-  <div id="status"></div>
-  <img id="preview" alt="Last capture will appear here" />
+  <div class="toolbar">
+    <button id="captureBtn">📸 Capture BnW</button>
+    <span id="status" class="muted"></span>
+  </div>
+
+  <div class="hero">
+    <div>
+      <img id="preview" alt="Last capture will appear here" />
+      <div class="muted">Latest image (auto-refreshes)</div>
+    </div>
+    <div class="muted">
+      Tip: press the hardware button to capture, or use this button.<br/>
+      The gallery below shows all saved photos from <code>/images</code> (newest first).
+    </div>
+  </div>
+
+  <div class="gal-title"><h2 style="margin:0">Gallery</h2><span class="muted" id="count"></span></div>
+  <div id="grid" class="grid"></div>
 
   <script>
     const btn = document.getElementById("captureBtn");
     const statusEl = document.getElementById("status");
     const img = document.getElementById("preview");
+    const grid = document.getElementById("grid");
+    const countEl = document.getElementById("count");
 
     async function capture() {
       btn.disabled = true;
       btn.textContent = "Capturing…";
-      statusEl.textContent = "Taking picture and converting to BnW…";
+      statusEl.textContent = "Taking picture and converting…";
 
       try {
         const r = await fetch("/capture", { method: "POST" });
         const data = await r.json();
         if (!data.ok) throw new Error(data.error || "Unknown error");
-        img.src = data.url; // cache-busted URL from server
+        img.src = data.url; // cache-busted latest
         statusEl.textContent = "Done.";
+        // Refresh gallery after capture
+        await refreshGallery();
       } catch (e) {
         console.error(e);
-        statusEl.textContent = "Failed to capture. Check server logs.";
+        statusEl.textContent = e.message || "Failed to capture. Check server logs.";
       } finally {
         btn.disabled = false;
         btn.textContent = "📸 Capture BnW";
@@ -44,18 +91,69 @@
     }
 
     btn.addEventListener("click", capture);
+
+    // SSE: update latest preview + refresh gallery on any capture (web or hardware)
     const es = new EventSource("/events");
-    es.onmessage = (ev) => {
+    es.onmessage = async (ev) => {
       try {
         const msg = JSON.parse(ev.data);
-      if (msg.type === "captured") {
-        img.src = "/latest.webp?ts=" + msg.ts; // cache-busted
-      }
-    } catch (e) {
-      console.warn("SSE parse error", e);
+        if (msg.type === "captured") {
+          img.src = "/latest.webp?ts=" + msg.ts;
+          await refreshGallery();
+        }
+      } catch {}
+    };
+
+    // Render helpers
+    function fmtBytes(n){
+      if (n < 1024) return n + " B";
+      if (n < 1024*1024) return (n/1024).toFixed(1) + " KB";
+      return (n/1024/1024).toFixed(2) + " MB";
     }
-  };
+
+    function renderGallery(items){
+      grid.innerHTML = "";
+      countEl.textContent = `(${items.length})`;
+      for (const it of items){
+        const card = document.createElement("a");
+        card.className = "card";
+        card.href = it.url;
+        card.target = "_blank";
+        card.rel = "noopener";
+        const img = document.createElement("img");
+        img.className = "thumb";
+        img.loading = "lazy";
+        img.src = it.url;
+        img.alt = it.name;
+
+        const meta = document.createElement("div");
+        meta.className = "meta";
+        const dt = new Date(it.mtimeMs);
+        meta.textContent = `${dt.toLocaleString()} · ${fmtBytes(it.size)}`;
+
+        card.appendChild(img);
+        card.appendChild(meta);
+        grid.appendChild(card);
+      }
+    }
+
+    async function refreshGallery(){
+      try{
+        const r = await fetch("/gallery.json");
+        const data = await r.json();
+        if (!data.ok) throw new Error("Gallery failed");
+        renderGallery(data.items);
+      }catch(e){
+        console.error(e);
+        statusEl.textContent = "Failed to load gallery.";
+      }
+    }
+
+    // Initial loads
+    (async function init(){
+      img.src = "/latest.webp?ts=" + Date.now();
+      await refreshGallery();
+    })();
   </script>
-  
 </body>
 </html>
