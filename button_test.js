@@ -36,6 +36,9 @@ function setupButton({ name, gpio }) {
   btn.on("alert", (level, tick) => {
     const state = level === 0 ? "PRESSED" : "RELEASED";
     console.log(`[${now()}] ${name}@GPIO${gpio} ${state} (level=${level}, tick=${tick})`);
+    if (level === 0) {
+      console.log("hi");
+    }
   });
 
   instances.push(btn);
