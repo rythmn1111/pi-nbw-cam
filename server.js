@@ -7,7 +7,8 @@ let i2cBus, Oled, Gpio, font5x7;
 try {
   i2cBus = require("i2c-bus");
   Oled = require("oled-i2c-bus");
-  Gpio = require("onoff").Gpio;
+  // Use pigpio for modern Raspberry Pi OS
+  Gpio = require("pigpio").Gpio;
   font5x7 = require("oled-font-5x7");
 } catch (e) {
   console.warn("OLED/GPIO modules not available. Running without hardware UI.");
@@ -49,15 +50,23 @@ function initializeHardwareUi() {
 
   try {
     if (!Gpio) return;
-    // falling edge, debounce ~100ms
-    button = new Gpio(BUTTON_GPIO, "in", "falling", { debounceTimeout: 100 });
-    button.watch(async (err, value) => {
-      if (err) {
-        console.error("Button error:", err);
-        return;
-      }
+    // Configure GPIO17 as input with internal pull-up; use alert for edge detection
+    button = new Gpio(BUTTON_GPIO, {
+      mode: Gpio.INPUT,
+      pullUpDown: Gpio.PUD_UP,
+    });
+    // Debounce using glitch filter: 100000 microseconds = 100 ms
+    if (typeof button.glitchFilter === "function") {
+      button.glitchFilter(100000);
+    }
+    // Enable alerts
+    if (typeof button.enableAlert === "function") {
+      button.enableAlert();
+    }
+    button.on("alert", async (level, tick) => {
+      // Falling edge (pressed when using pull-up wiring)
+      if (level !== 0) return;
       if (isBusy) return;
-      // Start the 3-second countdown and capture
       isBusy = true;
       try {
         await runCountdownAndCapture();
@@ -175,10 +184,7 @@ app.listen(PORT, () => {
 
 process.on("SIGINT", () => {
   try {
-    if (button) {
-      button.unwatchAll();
-      button.unexport();
-    }
+    if (button && typeof button.disableAlert === "function") button.disableAlert();
   } catch {}
   try {
     if (oled) {
