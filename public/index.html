@@ -4,10 +4,14 @@
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
   <title>Pi BnW Cam</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Unbounded:wght@200..900&display=swap" rel="stylesheet">
   <style>
     :root { --gap: 12px; }
-    body{font-family:system-ui,Segoe UI,Arial,sans-serif;max-width:980px;margin:24px auto;padding:0 16px;background:#ECE7E1;color:#333}
+    body{font-family:'Unbounded',system-ui,Segoe UI,Arial,sans-serif;max-width:980px;margin:24px auto;padding:0 16px;background:#ECE7E1;color:#333}
     h1{margin:0 0 12px;color:#eb5d40}
+    .logo{height:120px;width:auto;display:block;margin:0 auto 8px}
     .toolbar{display:flex;flex-wrap:wrap;align-items:center;gap:10px;margin-bottom:10px}
     button{padding:10px 16px;border:0;border-radius:10px;font-weight:600;cursor:pointer}
     #captureBtn{background:#eb5d40;color:#fff}
@@ -29,8 +33,8 @@
     @media (max-width:720px){ .hero{grid-template-columns:1fr} }
   </style>
 </head>
-<body>
-  <h1>EvenAfter Cam</h1>
+  <body>
+    <img src="/logo.png" alt="EvenAfter Cam" class="logo">
   <div class="toolbar">
     <button id="captureBtn">📸 Capture BnW</button>
     <button id="uploadAllBtn">⬆️ Upload to Arweave</button>
@@ -42,10 +46,7 @@
       <img id="preview" alt="Last capture will appear here" />
       <div class="muted">Latest image (auto-refreshes)</div>
     </div>
-    <div class="muted">
-      Capture as usual. <b>No uploads</b> happen automatically.<br/>
-      Click “Upload to Arweave” to upload all local photos; uploaded files are <b>deleted from the Pi</b> and appear below under “Archived”.
-    </div>
+    
   </div>
 
   <div class="section">
