@@ -17,6 +17,16 @@ fs.mkdirSync(IMAGES_DIR, { recursive: true });
 app.use(express.static(IMAGES_DIR));
 app.use(express.static(path.join(__dirname, "public")));
 
+// Serve latest.webp directly
+app.get("/latest.webp", (req, res) => {
+  const latestPath = path.join(__dirname, "public", "latest.webp");
+  if (fs.existsSync(latestPath)) {
+    res.sendFile(latestPath);
+  } else {
+    res.status(404).send("No latest image available");
+  }
+});
+
 // Button setup
 const BUTTON_GPIO = 13;
 let btn = null;
@@ -58,11 +68,13 @@ function captureImage() {
       
       // Update latest image
       latestImage = filename;
+      console.log("Latest image set to:", latestImage);
       
       // Also copy to public as latest.webp for easy viewing
       const latestPath = path.join(__dirname, "public", "latest.webp");
       fs.copyFileSync(filepath, latestPath);
       console.log("Latest image updated:", latestPath);
+      console.log("File exists:", fs.existsSync(latestPath));
     });
   });
 }
@@ -74,7 +86,7 @@ app.get("/latest", (req, res) => {
       success: true, 
       filename: latestImage,
       url: `/images/${latestImage}`,
-      latestUrl: "/latest.jpg"
+      latestUrl: "/latest.webp"
     });
   } else {
     res.json({ success: false, message: "No images captured yet" });
