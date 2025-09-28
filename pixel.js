@@ -405,9 +405,9 @@ async function runCaptureWithUI(state) {
   // Show countdown while capture runs
   await showActiveCountdown(3);
 
-  // Processing splash
+  // Processing splash - show for 8 seconds then show saved
   await showStatus("Processing...");
-  await sleep(10000);
+  await sleep(8000);
 
   // Surface any capture error now (in the right UI place)
   if (capError) {

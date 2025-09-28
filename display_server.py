@@ -21,7 +21,7 @@ try:
     
     disp = ST7735(
         port=0, cs=0, dc=DC_PIN, rst=RST_PIN, backlight=BL_PIN,
-        width=WIDTH, height=HEIGHT, rotation=ROTATION,
+        width=WIDTH, height=HEIGHT, rotation=90,  # Rotate 90 degrees
         bgr=BGR, invert=INVERT, spi_speed_hz=SPI_HZ,
         offset_left=OFFSET_LEFT, offset_top=OFFSET_TOP
     )
