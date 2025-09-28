@@ -405,26 +405,26 @@ async function runCaptureWithUI(state) {
   // Show countdown while capture runs
   await showActiveCountdown(3);
 
-  // Processing splash - show for 8 seconds then show saved (independent of capture timing)
+  // Processing splash - show until capture actually completes
   await showStatus("Processing...");
   
-  // Wait exactly 8 seconds for processing display
-  await sleep(8000);
-  
-  // Always show saved after 8 seconds, regardless of capture status
-  await showResult(true);
-  
-  // Reset busy state after showing saved (so user can take another photo)
-  isBusy = false;
-  
-  // Now check if capture actually completed
-  const filename = await capPromise; // safe now
+  // Wait for capture to actually complete (with timeout)
+  const filename = await Promise.race([
+    capPromise,
+    new Promise((_, reject) => setTimeout(() => reject(new Error('Capture timeout')), 30000))
+  ]);
   
   if (capError) {
     // If there was an error, show error message
     await showResult(false, "Capture error");
     throw capError;
   }
+
+  // Now show saved after capture actually completed
+  await showResult(true);
+  
+  // Reset busy state after showing saved (so user can take another photo)
+  isBusy = false;
 
   // Decrement quota & UI
   decAndPersist(state);
