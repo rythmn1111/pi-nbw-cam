@@ -281,23 +281,46 @@ let isBusy = false;
 // FIX #1: reject with Error, not plain object
 function safeExec(cmd, opts = {}) {
   return new Promise((resolve, reject) => {
-    exec(cmd, { timeout: 15000, ...opts }, (err, stdout, stderr) => {
+    console.log('Executing:', cmd);
+    exec(cmd, { timeout: 30000, ...opts }, (err, stdout, stderr) => {
       if (err) {
+        console.error('Command failed:', err.message);
+        console.error('Stderr:', stderr);
         const e = new Error(String(stderr || err.message || "exec failed"));
         e.stderr = String(stderr || "");
         e.cause = err;
         return reject(e);
       }
+      console.log('Command completed successfully');
       resolve({ stdout: String(stdout), stderr: String(stderr) });
     });
   });
 }
 
 async function captureImage() {
-  const cmd = `rpicam-still -n -t 1 -o - | convert - -resize '1024x1024>' -colorspace Gray -auto-level -contrast-stretch 0.5%x0.5% -define webp:lossless=false -quality 80 -define webp:method=6 -define webp:target-size=100000 "${OUTPUT_PATH}"`;
+  // Simplified capture command - faster processing
+  const tempFile = path.join(ROOT_DIR, 'temp_capture.jpg');
+  const cmd = `rpicam-still -n -t 1 -o "${tempFile}"`;
+  
+  console.log('Starting camera capture...');
   await safeExec(cmd);
+  
+  // Check if file was created
+  if (!fs.existsSync(tempFile)) {
+    throw new Error('Camera capture failed - no file created');
+  }
+  
+  console.log('Processing image...');
+  // Convert to WebP with simpler processing
+  const convertCmd = `convert "${tempFile}" -resize '1024x1024>' -colorspace Gray -quality 80 "${OUTPUT_PATH}"`;
+  await safeExec(convertCmd);
+  
+  // Clean up temp file
+  try { fs.unlinkSync(tempFile); } catch {}
+  
   const name = `${nowStamp()}.webp`;
   fs.copyFileSync(OUTPUT_PATH, path.join(IMAGES_DIR, name));
+  console.log('Image saved:', name);
   return name;
 }
 
@@ -411,7 +434,7 @@ async function runCaptureWithUI(state) {
   // Wait for capture to actually complete (with timeout)
   const filename = await Promise.race([
     capPromise,
-    new Promise((_, reject) => setTimeout(() => reject(new Error('Capture timeout')), 30000))
+    new Promise((_, reject) => setTimeout(() => reject(new Error('Capture timeout after 60 seconds')), 60000))
   ]);
   
   if (capError) {
