@@ -303,20 +303,41 @@ async function captureImage() {
   
   console.log('Starting camera capture...');
   
-  // Use rpicam-still (we know this works on your Pi)
+  // Use rpicam-still with explicit timeout and better error handling
   try {
     console.log('Using rpicam-still...');
-    const cmd = `rpicam-still -o "${tempFile}"`;
+    const cmd = `timeout 10 rpicam-still -o "${tempFile}"`;
+    console.log('Command:', cmd);
     await safeExec(cmd);
     
+    // Wait a moment for file to be written
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
     if (fs.existsSync(tempFile)) {
-      console.log('rpicam-still succeeded');
+      console.log('rpicam-still succeeded, file exists');
     } else {
+      console.log('rpicam-still failed - no file created');
       throw new Error('rpicam-still failed - no file created');
     }
   } catch (e) {
     console.log('rpicam-still failed:', e.message);
-    throw new Error('Camera capture failed: ' + e.message);
+    console.log('Trying alternative approach...');
+    
+    // Try with different parameters
+    try {
+      const cmd2 = `timeout 10 rpicam-still --width 640 --height 480 -o "${tempFile}"`;
+      console.log('Trying alternative command:', cmd2);
+      await safeExec(cmd2);
+      
+      if (fs.existsSync(tempFile)) {
+        console.log('Alternative rpicam-still succeeded');
+      } else {
+        throw new Error('Alternative command also failed');
+      }
+    } catch (e2) {
+      console.log('All rpicam-still attempts failed');
+      throw new Error('Camera capture failed: ' + e.message);
+    }
   }
   
   console.log('Processing image...');
