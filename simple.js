@@ -107,20 +107,9 @@ const BUTTON_GPIO = 13;
 let btn = null;
 let latestImage = null;
 
-// Enhanced capture function with display
-async function captureImage() {
+// Simple capture function (working version)
+function captureImage() {
   console.log("Button pressed - capturing image...");
-  
-  // Show "READY" on display
-  await showDisplayText("READY", 'large', 'green');
-  await new Promise(resolve => setTimeout(resolve, 1000));
-  
-  // Show 10-second countdown
-  console.log("Display: Countdown starting...");
-  await showCountdown(10);
-  
-  // Show "PROCESSING" on display
-  await showDisplayText("PROCESSING", 'large', 'yellow');
   
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const tempFile = path.join(__dirname, `temp_${timestamp}.jpg`);
@@ -132,7 +121,6 @@ async function captureImage() {
   exec(cmd, (error, stdout, stderr) => {
     if (error) {
       console.error("Capture failed:", error);
-      showDisplayText("ERROR", 'large', 'red');
       return;
     }
     
@@ -147,15 +135,11 @@ async function captureImage() {
       
       if (convertError) {
         console.error("Convert failed:", convertError);
-        showDisplayText("ERROR", 'large', 'red');
         return;
       }
       
       console.log("Image processed:", filename);
       console.log("File saved to:", filepath);
-      
-      // Show "SAVED" on display
-      showDisplayText("SAVED ✓", 'large', 'green');
       
       // Update latest image
       latestImage = filename;
@@ -166,11 +150,6 @@ async function captureImage() {
       fs.copyFileSync(filepath, latestPath);
       console.log("Latest image updated:", latestPath);
       console.log("File exists:", fs.existsSync(latestPath));
-      
-      // Show "READY" again after 2 seconds
-      setTimeout(() => {
-        showDisplayText("READY", 'large', 'green');
-      }, 2000);
     });
   });
 }
@@ -237,41 +216,24 @@ function initButton() {
 }
 
 // Startup
-async function startApp() {
-  console.log("Simple camera capture with web frontend and display starting...");
-  
-  // Initialize display
-  const displayOk = await initDisplay();
-  if (displayOk) {
-    await showDisplayText("READY", 'large', 'green');
-  }
-  
-  // Initialize button
-  const buttonOk = initButton();
-  
-  if (buttonOk) {
-    // Start web server
-    app.listen(PORT, () => {
-      console.log(`Web server running on http://localhost:${PORT}`);
-      console.log("Press the button to capture an image!");
-      console.log("View images at:");
-      console.log(`  - Web Interface: http://localhost:${PORT}`);
-      console.log(`  - Latest: http://localhost:${PORT}/latest.webp`);
-      console.log(`  - Gallery API: http://localhost:${PORT}/gallery`);
-      if (displayOk) {
-        console.log("Display: READY");
-      } else {
-        console.log("Display: Not available");
-      }
-      console.log("Press Ctrl+C to exit");
-    });
-  } else {
-    console.log("Failed to initialize button");
-    process.exit(1);
-  }
-}
+console.log("Simple camera capture with web frontend starting...");
+const buttonOk = initButton();
 
-startApp().catch(console.error);
+if (buttonOk) {
+  // Start web server
+  app.listen(PORT, () => {
+    console.log(`Web server running on http://localhost:${PORT}`);
+    console.log("Press the button to capture an image!");
+    console.log("View images at:");
+    console.log(`  - Web Interface: http://localhost:${PORT}`);
+    console.log(`  - Latest: http://localhost:${PORT}/latest.webp`);
+    console.log(`  - Gallery API: http://localhost:${PORT}/gallery`);
+    console.log("Press Ctrl+C to exit");
+  });
+} else {
+  console.log("Failed to initialize button");
+  process.exit(1);
+}
 
 // Cleanup on exit
 process.on("SIGINT", async () => {
