@@ -464,7 +464,7 @@ async function runCaptureWithUI(state) {
   // Wait for capture to actually complete (with timeout)
   const filename = await Promise.race([
     capPromise,
-    new Promise((_, reject) => setTimeout(() => reject(new Error('Capture timeout after 30 seconds')), 30000))
+    new Promise((_, reject) => setTimeout(() => reject(new Error('Capture timeout after 15 seconds')), 15000))
   ]);
   
   if (capError) {
