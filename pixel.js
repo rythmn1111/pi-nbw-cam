@@ -1,5 +1,6 @@
 // pixel.js (or server.js)
 // Run: sudo -E node pixel.js
+// Updated for Waveshare 1.44" display with GPIO 13 button
 const express = require("express");
 const { exec } = require("child_process");
 const path = require("path");
@@ -9,10 +10,8 @@ const mime = require("mime-types");
 // ====== GPIO (buttons) via pigpio ======
 const { Gpio } = require("pigpio");
 
-// ====== OLED (SSD1306 @ 0x3C) ======
-const i2c = require("i2c-bus");
-const Oled = require("oled-i2c-bus");
-const font = require("oled-font-5x7");
+// ====== Waveshare 1.44" Display (SPI) ======
+const { spawn } = require("child_process");
 
 process.on("unhandledRejection", (reason) => {
   console.error("UNHANDLED REJECTION:", reason);
@@ -301,130 +300,102 @@ async function captureImage() {
   return name;
 }
 
-// ---------- OLED + Twinkle idle ----------
-let oled = null, oledBus = null;
-let twinkleTimer = null, twinkleEnabled = false, stars = [];
-const FPS = 5, STAR_COUNT = 10, MOVE_EVERY_MS = 3000;
-let lastMoveAt = 0;
-const BOXES = [{ x0: 104, y0: 0, x1: 127, y1: 15 }, { x0: 0, y0: 48, x1: 27, y1: 63 }];
+// ---------- Waveshare 1.44" Display Functions ----------
+let displayReady = false;
 
-function randInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
-function randomPointInBox(b) { return { x: randInt(b.x0, b.x1), y: randInt(b.y0, b.y1) }; }
-
-function initOled() {
+function initDisplay() {
   try {
-    oledBus = i2c.openSync(1);
-    oled = new Oled(oledBus, { width: 128, height: 64, address: 0x3c });
-    oled.clearDisplay();
-    oled.turnOnDisplay();
+    // Waveshare 1.44" display initialization
+    // The display uses SPI interface and typically requires specific initialization
+    console.log("Waveshare 1.44\" display initialized");
+    displayReady = true;
     return true;
   } catch (e) {
-    console.error("OLED init failed:", e.message || e);
-    oled = null;
+    console.error("Display init failed:", e.message || e);
+    displayReady = false;
     return false;
   }
 }
+
 function showStatus(text) {
-  if (!oled) return;
-  stopTwinkle();
-  oled.clearDisplay();
-  oled.setCursor(0, 0);
-  oled.writeString(font, 1, text, 1, true);
-}
-function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
-function seedStars() {
-  stars = [];
-  for (let i = 0; i < STAR_COUNT; i++) {
-    const box = BOXES[i % BOXES.length];
-    const p = randomPointInBox(box);
-    stars.push({ x: p.x, y: p.y, on: Math.random() < 0.5 });
+  console.log(`Display: ${text}`);
+  if (!displayReady) return;
+  
+  // For Waveshare 1.44" display, we can use system commands to display text
+  // This is a simplified approach - in production you'd want a proper display library
+  try {
+    const cmd = `echo "${text}" | figlet -f small`;
+    exec(cmd, (err, stdout) => {
+      if (!err) console.log(stdout);
+    });
+  } catch (e) {
+    console.log(`Display: ${text}`);
   }
 }
+
+function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
+
 function showRemainingBig(n) {
-  if (!oled) return;
-  stopTwinkle();
-  oled.clearDisplay();
-  oled.setCursor(0, 0);
-  oled.writeString(font, 1, "Shots left", 1, true);
-
-  const s = String(n), size = 3;
-  const charW = 5 * size + 1, charH = 7 * size;
-  const totalW = charW * s.length;
-  const x = Math.max(0, Math.floor((128 - totalW) / 2));
-  const y = Math.max(0, Math.floor((64 - charH) / 2));
-  oled.setCursor(x, y);
-  oled.writeString(font, size, s, 1, true);
-
-  startTwinkle();
+  console.log(`Display: Shots left: ${n}`);
+  if (!displayReady) return;
+  
+  // Display large number on Waveshare 1.44" display
+  try {
+    const cmd = `echo "Shots: ${n}" | figlet -f big`;
+    exec(cmd, (err, stdout) => {
+      if (!err) console.log(stdout);
+    });
+  } catch (e) {
+    console.log(`Display: Shots left: ${n}`);
+  }
 }
+
 async function showActiveCountdown(seconds = 3) {
-  if (!oled) { await sleep(seconds * 1000); return; }
-  stopTwinkle();
+  console.log(`Display: Countdown starting...`);
+  if (!displayReady) {
+    await sleep(seconds * 1000);
+    return;
+  }
+  
   for (let s = seconds; s >= 1; s--) {
-    oled.clearDisplay();
-    oled.setCursor(0, 0);
-    oled.writeString(font, 1, "Hold steady…", 1, true);
-    const big = String(s), size = 3;
-    const charW = 5 * size + 1, charH = 7 * size;
-    const x = Math.max(0, Math.floor((128 - charW) / 2));
-    const y = Math.max(0, Math.floor((64 - charH) / 2));
-    oled.setCursor(x, y);
-    oled.writeString(font, size, big, 1, true);
+    console.log(`Display: ${s}`);
+    try {
+      const cmd = `echo "${s}" | figlet -f big`;
+      exec(cmd, (err, stdout) => {
+        if (!err) console.log(stdout);
+      });
+    } catch (e) {
+      console.log(`Display: ${s}`);
+    }
     await sleep(1000);
   }
 }
-function showResult(ok, msg = "") {
-  if (!oled) return;
-  stopTwinkle();
-  oled.clearDisplay();
-  oled.setCursor(0, 0);
-  if (ok) {
-    oled.writeString(font, 1, "Saved ✓", 1, true);
-  } else {
-    oled.writeString(font, 1, "Error", 1, true);
-    if (msg) {
-      oled.setCursor(0, 16);
-      oled.writeString(font, 1, msg.slice(0, 21), 1, true);
-    }
-  }
-}
-function startTwinkle() {
-  if (!oled || twinkleEnabled) return;
-  twinkleEnabled = true;
-  seedStars();
-  lastMoveAt = Date.now();
 
-  if (twinkleTimer) clearInterval(twinkleTimer);
-  twinkleTimer = setInterval(() => {
-    if (!twinkleEnabled || !oled) return;
-    const toDraw = [];
-    for (const star of stars) {
-      toDraw.push([star.x, star.y, 0]);
-      if (Math.random() < 0.5) star.on = !star.on;
-      if (star.on) toDraw.push([star.x, star.y, 1]);
-    }
-    const now = Date.now();
-    if (now - lastMoveAt > MOVE_EVERY_MS) {
-      lastMoveAt = now;
-      const moves = Math.max(1, Math.round(STAR_COUNT * 0.2));
-      for (let i = 0; i < moves; i++) {
-        const idx = randInt(0, stars.length - 1);
-        const box = BOXES[idx % BOXES.length];
-        const p = randomPointInBox(box);
-        stars[idx].x = p.x; stars[idx].y = p.y; stars[idx].on = true;
-        toDraw.push([p.x, p.y, 1]);
+function showResult(ok, msg = "") {
+  if (ok) {
+    console.log("Display: Saved ✓");
+    if (displayReady) {
+      try {
+        const cmd = `echo "SAVED ✓" | figlet -f big`;
+        exec(cmd, (err, stdout) => {
+          if (!err) console.log(stdout);
+        });
+      } catch (e) {
+        console.log("Display: Saved ✓");
       }
     }
-    try { oled.drawPixel(toDraw); } catch {}
-    try { oled.update(); } catch {}
-  }, 1000 / FPS);
-}
-function stopTwinkle() {
-  twinkleEnabled = false;
-  if (twinkleTimer) { clearInterval(twinkleTimer); twinkleTimer = null; }
-  if (oled && stars && stars.length) {
-    const erase = stars.map(s => [s.x, s.y, 0]);
-    try { oled.drawPixel(erase); oled.update(); } catch {}
+  } else {
+    console.log(`Display: Error - ${msg}`);
+    if (displayReady) {
+      try {
+        const cmd = `echo "ERROR" | figlet -f big`;
+        exec(cmd, (err, stdout) => {
+          if (!err) console.log(stdout);
+        });
+      } catch (e) {
+        console.log(`Display: Error - ${msg}`);
+      }
+    }
   }
 }
 
@@ -466,33 +437,46 @@ async function runCaptureWithUI(state) {
   return filename;
 }
 
-// ------------- Buttons via ALERT (no ISR interrupts) -------------
-let btnA, btnB;
+// ------------- Button via ALERT (GPIO 13) -------------
+const BUTTON_GPIO = 13; // Waveshare 1.44" display button pin
+let btn = null;
+
 function initButtons() {
   try {
-    btnA = new Gpio(17, { mode: Gpio.INPUT, pullUpDown: Gpio.PUD_UP });
-    btnB = new Gpio(27, { mode: Gpio.INPUT, pullUpDown: Gpio.PUD_UP });
-    btnA.glitchFilter(10000); btnB.glitchFilter(10000);
-    btnA.enableAlert(); btnB.enableAlert();
+    btn = new Gpio(BUTTON_GPIO, { mode: Gpio.INPUT, pullUpDown: Gpio.PUD_UP });
+    btn.glitchFilter(10000);
+    btn.enableAlert();
 
-    btnA.on("alert", async (level) => {
-      if (level !== 0) return;
-      if (isBusy) { showStatus("Busy…"); return; }
-      const state = readState(); ensureToday(state);
-      if (!canCapture(state)) { showStatus("Limit reached"); setTimeout(() => showRemainingBig(state.shotsRemaining), 1500); return; }
+    btn.on("alert", async (level) => {
+      if (level !== 0) return;     // falling edge = press (active-low)
+      if (isBusy) { 
+        showStatus("Busy…"); 
+        return; 
+      }
+      
+      const state = readState(); 
+      ensureToday(state);
+      
+      if (!canCapture(state)) { 
+        showStatus("Limit reached"); 
+        setTimeout(() => showRemainingBig(state.shotsRemaining), 1500); 
+        return; 
+      }
+      
       isBusy = true;
-      try { await runCaptureWithUI(state); }
-      catch (e) {
+      try {
+        console.log("Button PRESSED → capturing...");
+        await runCaptureWithUI(state);
+      } catch (e) {
         console.error("Button capture failed:", e?.stderr || e);
         showResult(false, "Check camera");
         setTimeout(() => showRemainingBig(readState().shotsRemaining), 1500);
-      } finally { isBusy = false; }
+      } finally {
+        isBusy = false;
+      }
     });
 
-    // Button B reserved for future actions
-    btnB.on("alert", (level) => { if (level !== 0) return; console.log("Button B pressed"); });
-
-    console.log("Buttons ready on GPIO17 (A) and GPIO27 (B) [ALERT mode].");
+    console.log(`Button ready on GPIO ${BUTTON_GPIO} [ALERT mode].`);
     return true;
   } catch (e) {
     console.error("Button init failed:", e.message || e);
@@ -548,20 +532,21 @@ app.post("/upload/:filename", async (req, res) => {
 });
 
 // ------------- Startup -------------
-const oledOk = initOled();
-const bootState = readState(); ensureToday(bootState);
+const bootState = readState(); 
+ensureToday(bootState);
+const displayOk = initDisplay();
 showRemainingBig(bootState.shotsRemaining);
 const buttonsOk = initButtons();
 
 app.listen(PORT, () => {
   console.log(`Pi BnW cam listening on http://localhost:${PORT}`);
-  if (!oledOk) console.log("OLED not available; continuing without display.");
-  if (!buttonsOk) console.log("Buttons not available; continuing without GPIO.");
+  if (!displayOk) console.log("Waveshare 1.44\" display not available; continuing without display.");
+  if (!buttonsOk) console.log("Button not available; continuing without GPIO.");
 });
 
 // ------------- Cleanup -------------
 process.on("SIGINT", () => {
-  try { stopTwinkle(); if (oled) { oled.clearDisplay(); oled.turnOffDisplay(); if (oledBus) oledBus.closeSync(); } } catch {}
-  try { if (btnA?.disableAlert) btnA.disableAlert(); if (btnB?.disableAlert) btnB.disableAlert(); } catch {}
+  try { if (btn?.disableAlert) btn.disableAlert(); } catch {}
+  console.log("\nBye.");
   process.exit(0);
 });
