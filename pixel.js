@@ -298,60 +298,51 @@ function safeExec(cmd, opts = {}) {
 }
 
 async function captureImage() {
-  // Try multiple capture methods
+  // Simple capture using the approach that works
   const tempFile = path.join(ROOT_DIR, 'temp_capture.jpg');
   
   console.log('Starting camera capture...');
   
-  // Use shell script to capture image
-  try {
-    console.log('Using capture script...');
-    const scriptPath = path.join(ROOT_DIR, 'capture.sh');
-    const cmd = `bash "${scriptPath}" "${tempFile}"`;
-    console.log('Command:', cmd);
+  return new Promise((resolve, reject) => {
+    const cmd = `rpicam-still -o "${tempFile}"`;
+    console.log('Executing:', cmd);
     
-    const result = await safeExec(cmd);
-    console.log('Script output:', result.stdout);
-    
-    if (fs.existsSync(tempFile)) {
-      console.log('Capture script succeeded, file exists');
-    } else {
-      console.log('Capture script failed - no file created');
-      throw new Error('Capture script failed - no file created');
-    }
-  } catch (e) {
-    console.log('Capture script failed:', e.message);
-    console.log('Trying direct rpicam-still...');
-    
-    // Fallback to direct command
-    try {
-      const cmd2 = `rpicam-still -o "${tempFile}"`;
-      console.log('Trying direct command:', cmd2);
-      await safeExec(cmd2);
-      
-      if (fs.existsSync(tempFile)) {
-        console.log('Direct rpicam-still succeeded');
-      } else {
-        throw new Error('Direct command also failed');
+    exec(cmd, (error, stdout, stderr) => {
+      if (error) {
+        console.error('Capture failed:', error);
+        reject(new Error('Camera capture failed: ' + error.message));
+        return;
       }
-    } catch (e2) {
-      console.log('All capture attempts failed');
-      throw new Error('Camera capture failed: ' + e.message);
-    }
-  }
-  
-  console.log('Processing image...');
-  // Convert to WebP with simpler processing
-  const convertCmd = `convert "${tempFile}" -resize '1024x1024>' -colorspace Gray -quality 80 "${OUTPUT_PATH}"`;
-  await safeExec(convertCmd);
-  
-  // Clean up temp file
-  try { fs.unlinkSync(tempFile); } catch {}
-  
-  const name = `${nowStamp()}.webp`;
-  fs.copyFileSync(OUTPUT_PATH, path.join(IMAGES_DIR, name));
-  console.log('Image saved:', name);
-  return name;
+      
+      console.log('Camera capture completed');
+      
+      // Check if file was created
+      if (!fs.existsSync(tempFile)) {
+        reject(new Error('No file created'));
+        return;
+      }
+      
+      console.log('Processing image...');
+      // Convert to WebP
+      const convertCmd = `convert "${tempFile}" -resize '1024x1024>' -colorspace Gray -quality 80 "${OUTPUT_PATH}"`;
+      
+      exec(convertCmd, (convertError, convertStdout, convertStderr) => {
+        // Clean up temp file
+        try { fs.unlinkSync(tempFile); } catch {}
+        
+        if (convertError) {
+          console.error('Convert failed:', convertError);
+          reject(new Error('Image processing failed: ' + convertError.message));
+          return;
+        }
+        
+        const name = `${nowStamp()}.webp`;
+        fs.copyFileSync(OUTPUT_PATH, path.join(IMAGES_DIR, name));
+        console.log('Image saved:', name);
+        resolve(name);
+      });
+    });
+  });
 }
 
 // ---------- Waveshare 1.44" Display Functions ----------
