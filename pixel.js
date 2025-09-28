@@ -303,39 +303,39 @@ async function captureImage() {
   
   console.log('Starting camera capture...');
   
-  // Use rpicam-still with explicit timeout and better error handling
+  // Use shell script to capture image
   try {
-    console.log('Using rpicam-still...');
-    const cmd = `timeout 10 rpicam-still -o "${tempFile}"`;
+    console.log('Using capture script...');
+    const scriptPath = path.join(ROOT_DIR, 'capture.sh');
+    const cmd = `bash "${scriptPath}" "${tempFile}"`;
     console.log('Command:', cmd);
-    await safeExec(cmd);
     
-    // Wait a moment for file to be written
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    const result = await safeExec(cmd);
+    console.log('Script output:', result.stdout);
     
     if (fs.existsSync(tempFile)) {
-      console.log('rpicam-still succeeded, file exists');
+      console.log('Capture script succeeded, file exists');
     } else {
-      console.log('rpicam-still failed - no file created');
-      throw new Error('rpicam-still failed - no file created');
+      console.log('Capture script failed - no file created');
+      throw new Error('Capture script failed - no file created');
     }
   } catch (e) {
-    console.log('rpicam-still failed:', e.message);
-    console.log('Trying alternative approach...');
+    console.log('Capture script failed:', e.message);
+    console.log('Trying direct rpicam-still...');
     
-    // Try with different parameters
+    // Fallback to direct command
     try {
-      const cmd2 = `timeout 10 rpicam-still --width 640 --height 480 -o "${tempFile}"`;
-      console.log('Trying alternative command:', cmd2);
+      const cmd2 = `rpicam-still -o "${tempFile}"`;
+      console.log('Trying direct command:', cmd2);
       await safeExec(cmd2);
       
       if (fs.existsSync(tempFile)) {
-        console.log('Alternative rpicam-still succeeded');
+        console.log('Direct rpicam-still succeeded');
       } else {
-        throw new Error('Alternative command also failed');
+        throw new Error('Direct command also failed');
       }
     } catch (e2) {
-      console.log('All rpicam-still attempts failed');
+      console.log('All capture attempts failed');
       throw new Error('Camera capture failed: ' + e.message);
     }
   }
