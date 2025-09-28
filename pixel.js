@@ -405,22 +405,26 @@ async function runCaptureWithUI(state) {
   // Show countdown while capture runs
   await showActiveCountdown(3);
 
-  // Processing splash - show for 8 seconds then show saved
+  // Processing splash - show for 8 seconds then show saved (independent of capture timing)
   await showStatus("Processing...");
+  
+  // Wait exactly 8 seconds for processing display
   await sleep(8000);
-
-  // Surface any capture error now (in the right UI place)
+  
+  // Always show saved after 8 seconds, regardless of capture status
+  await showResult(true);
+  
+  // Now check if capture actually completed
+  const filename = await capPromise; // safe now
+  
   if (capError) {
+    // If there was an error, show error message
     await showResult(false, "Capture error");
     throw capError;
   }
 
-  // capPromise has either resolved to filename or null; get the filename
-  const filename = await capPromise; // safe now
-
   // Decrement quota & UI
   decAndPersist(state);
-  await showResult(true);
   notifyCaptured(filename);
 
   setTimeout(async () => {
