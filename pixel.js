@@ -303,10 +303,10 @@ async function captureImage() {
   
   console.log('Starting camera capture...');
   
-  // Method 1: Try rpicam-still with timeout
+  // Use rpicam-still (we know this works on your Pi)
   try {
-    console.log('Trying rpicam-still...');
-    const cmd = `timeout 15 rpicam-still -n -t 1 -o "${tempFile}"`;
+    console.log('Using rpicam-still...');
+    const cmd = `rpicam-still -o "${tempFile}"`;
     await safeExec(cmd);
     
     if (fs.existsSync(tempFile)) {
@@ -315,29 +315,8 @@ async function captureImage() {
       throw new Error('rpicam-still failed - no file created');
     }
   } catch (e) {
-    console.log('rpicam-still failed, trying alternative...');
-    
-    // Method 2: Try libcamera-still as fallback
-    try {
-      const cmd2 = `timeout 15 libcamera-still -n -t 1 -o "${tempFile}"`;
-      await safeExec(cmd2);
-      
-      if (!fs.existsSync(tempFile)) {
-        throw new Error('libcamera-still also failed');
-      }
-      console.log('libcamera-still succeeded');
-    } catch (e2) {
-      console.log('libcamera-still also failed, trying raspistill...');
-      
-      // Method 3: Try raspistill as last resort
-      const cmd3 = `timeout 15 raspistill -n -t 1 -o "${tempFile}"`;
-      await safeExec(cmd3);
-      
-      if (!fs.existsSync(tempFile)) {
-        throw new Error('All camera methods failed');
-      }
-      console.log('raspistill succeeded');
-    }
+    console.log('rpicam-still failed:', e.message);
+    throw new Error('Camera capture failed: ' + e.message);
   }
   
   console.log('Processing image...');
