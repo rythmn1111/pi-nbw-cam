@@ -107,9 +107,14 @@ const BUTTON_GPIO = 13;
 let btn = null;
 let latestImage = null;
 
-// Simple capture function (working version)
+// Simple capture function with basic display
 function captureImage() {
   console.log("Button pressed - capturing image...");
+  
+  // Show READY on display (non-blocking)
+  if (displayReady) {
+    showDisplayText("READY", 'large', 'green');
+  }
   
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const tempFile = path.join(__dirname, `temp_${timestamp}.jpg`);
@@ -121,10 +126,18 @@ function captureImage() {
   exec(cmd, (error, stdout, stderr) => {
     if (error) {
       console.error("Capture failed:", error);
+      if (displayReady) {
+        showDisplayText("ERROR", 'large', 'red');
+      }
       return;
     }
     
     console.log("Raw image captured, processing...");
+    
+    // Show PROCESSING on display (non-blocking)
+    if (displayReady) {
+      showDisplayText("PROCESSING", 'large', 'yellow');
+    }
     
     // Convert to WebP, black & white, under 100KB
     const convertCmd = `convert "${tempFile}" -resize '1024x1024>' -colorspace Gray -auto-level -contrast-stretch 0.5%x0.5% -define webp:lossless=false -quality 80 -define webp:method=6 -define webp:target-size=100000 "${filepath}"`;
@@ -135,11 +148,23 @@ function captureImage() {
       
       if (convertError) {
         console.error("Convert failed:", convertError);
+        if (displayReady) {
+          showDisplayText("ERROR", 'large', 'red');
+        }
         return;
       }
       
       console.log("Image processed:", filename);
       console.log("File saved to:", filepath);
+      
+      // Show SAVED on display (non-blocking)
+      if (displayReady) {
+        showDisplayText("SAVED ✓", 'large', 'green');
+        // Show READY again after 2 seconds
+        setTimeout(() => {
+          showDisplayText("READY", 'large', 'green');
+        }, 2000);
+      }
       
       // Update latest image
       latestImage = filename;
@@ -216,7 +241,21 @@ function initButton() {
 }
 
 // Startup
-console.log("Simple camera capture with web frontend starting...");
+console.log("Simple camera capture with web frontend and display starting...");
+
+// Initialize display in background (non-blocking)
+initDisplay().then(displayOk => {
+  if (displayOk) {
+    console.log("Display: READY");
+    showDisplayText("READY", 'large', 'green');
+  } else {
+    console.log("Display: Not available");
+  }
+}).catch(err => {
+  console.log("Display: Not available");
+});
+
+// Initialize button
 const buttonOk = initButton();
 
 if (buttonOk) {
