@@ -1,190 +1,240 @@
-<!doctype html>
-<html>
+<!DOCTYPE html>
+<html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>Pi BnW Cam</title>
-  <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Atkinson+Hyperlegible:ital,wght@0,200;0,400;0,700;1,200;1,400;1,700&display=swap" rel="stylesheet">
-  <style>
-    :root { --gap: 12px; }
-    body{font-family:'Atkinson Hyperlegible',system-ui,Segoe UI,Arial,sans-serif;font-weight:200;max-width:980px;margin:24px auto;padding:0 16px;background:#ECE7E1;color:#333}
-    h1{margin:0 0 12px;color:#eb5d40}
-    .logo{height:120px;width:auto;display:block;margin:0 auto 40px}
-    .toolbar{display:flex;flex-wrap:wrap;align-items:center;justify-content:center;gap:20px;margin:40px 0 40px 0}
-    button{padding:16px 24px;border:0;border-radius:0;font-weight:200;font-family:'Atkinson Hyperlegible',system-ui,Segoe UI,Arial,sans-serif;cursor:pointer;font-size:16px;display:flex;align-items:center;gap:8px}
-    .icon{width:16px;height:16px;display:inline-block}
-    .camera-icon{background:linear-gradient(45deg, transparent 30%, currentColor 30%, currentColor 70%, transparent 70%), linear-gradient(-45deg, transparent 30%, currentColor 30%, currentColor 70%, transparent 70%);border-radius:2px}
-    .upload-icon{background:linear-gradient(90deg, currentColor 2px, transparent 2px, transparent 6px, currentColor 6px, currentColor 8px, transparent 8px, transparent 12px, currentColor 12px, currentColor 14px, transparent 14px), linear-gradient(0deg, currentColor 2px, transparent 2px, transparent 6px, currentColor 6px, currentColor 8px, transparent 8px, transparent 12px, currentColor 12px, currentColor 14px, transparent 14px);background-size:16px 16px}
-    #captureBtn{background:#eb5d40;color:#fff}
-    #uploadAllBtn{background:#ECE7E1;color:#eb5d40;border:2px solid #eb5d40}
-    #status{margin:4px 0 16px;opacity:.8;min-height:1.2em;color:#eb5d40}
-    .hero{display:grid;grid-template-columns:1fr;gap:16px;align-items:start}
-    .hero img{width:100%;height:auto;border-radius:12px;display:block}
-    .muted{opacity:.7;font-size:14px;color:#eb5d40}
-    .section{margin-top:24px}
-    .section h2{margin:0 0 8px;color:#eb5d40}
-    .grid{display:grid;grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));gap: var(--gap);}
-    .card{position:relative;overflow:visible;border-radius:12px;box-shadow:0 1px 4px rgba(235,93,64,.2);background:#ECE7E1;border:2px solid #eb5d40;transition:transform .15s ease, box-shadow .15s ease;display:flex;flex-direction:column}
-    .card:hover{transform:translateY(-2px); box-shadow:0 6px 18px rgba(235,93,64,.3)}
-    .thumb{width:100%;height:160px;object-fit:cover;display:block;filter:grayscale(100%) contrast(110%);border-radius:8px 8px 0 0}
-    .meta{background:#eb5d40;color:#fff;font-size:12px;padding:8px;border-radius:0 0 8px 8px;margin-top:auto}
-    .badge{position:absolute;right:8px;top:8px;font-size:12px;padding:2px 6px;border-radius:8px;background:#eb5d40;color:#fff}
-    .actions{position:absolute;right:8px;bottom:8px;display:flex;gap:6px}
-    .tiny{font-size:12px;padding:6px 8px;border-radius:8px;border:0;background:#eb5d40;color:#fff;opacity:.9}
-    @media (max-width:720px){ .hero{grid-template-columns:1fr} }
-  </style>
-</head>
-  <body>
-    <img src="/logo.png" alt="EvenAfter Cam" class="logo">
-  <div class="toolbar">
-    <button id="captureBtn"><span class="icon camera-icon"></span>Capture BnW</button>
-    <button id="uploadAllBtn"><span class="icon upload-icon"></span>Upload to Arweave</button>
-    <span id="status" class="muted"></span>
-  </div>
-
-  <div class="hero">
-    <div>
-      <img id="preview" alt="Last capture will appear here" />
-      <div class="muted">Latest image (auto-refreshes)</div>
-    </div>
-    
-  </div>
-
-  <div class="section">
-    <h2>Local (not uploaded) <span class="muted" id="countLocal"></span></h2>
-    <div id="gridLocal" class="grid"></div>
-  </div>
-
-  <div class="section">
-    <h2>Archived on Arweave <span class="muted" id="countAr"></span></h2>
-    <div id="gridAr" class="grid"></div>
-  </div>
-
-  <script>
-    const btn = document.getElementById("captureBtn");
-    const uploadAllBtn = document.getElementById("uploadAllBtn");
-    const statusEl = document.getElementById("status");
-    const img = document.getElementById("preview");
-    const gridLocal = document.getElementById("gridLocal");
-    const gridAr = document.getElementById("gridAr");
-    const countLocal = document.getElementById("countLocal");
-    const countAr = document.getElementById("countAr");
-
-    async function capture() {
-      btn.disabled = true;
-      btn.textContent = "Capturing…";
-      statusEl.textContent = "Taking picture and converting…";
-      try {
-        const r = await fetch("/capture", { method: "POST" });
-        const data = await r.json();
-        if (!data.ok) throw new Error(data.error || "Unknown error");
-        img.src = data.url;
-        statusEl.textContent = "Done.";
-        await refreshGallery();
-      } catch (e) {
-        console.error(e);
-        statusEl.textContent = e.message || "Failed to capture. Check server logs.";
-      } finally {
-        btn.disabled = false;
-        btn.textContent = "📸 Capture BnW";
-      }
-    }
-    btn.addEventListener("click", capture);
-
-    async function uploadAll() {
-      uploadAllBtn.disabled = true;
-      uploadAllBtn.textContent = "Queueing…";
-      statusEl.textContent = "Queueing all local images for Arweave upload…";
-      try {
-        const r = await fetch("/upload-all", { method: "POST" });
-        const data = await r.json();
-        if (!data.ok) throw new Error(data.error || "Failed");
-        statusEl.textContent = `Queued ${data.queued} image(s). Uploads run in background.`;
-      } catch (e) {
-        console.error(e);
-        statusEl.textContent = e.message || "Failed to queue uploads.";
-      } finally {
-        uploadAllBtn.disabled = false;
-        uploadAllBtn.textContent = "⬆️ Upload to Arweave";
-      }
-    }
-    uploadAllBtn.addEventListener("click", uploadAll);
-
-    // SSE: captured -> refresh; uploaded -> refresh (moves from Local to Archived)
-    const es = new EventSource("/events");
-    es.onmessage = async (ev) => {
-      try {
-        const msg = JSON.parse(ev.data);
-        if (msg.type === "captured") {
-          img.src = "/latest.webp?ts=" + msg.ts;
-          await refreshGallery();
-        } else if (msg.type === "uploaded") {
-          await refreshGallery();
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Pi B&W Camera</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
         }
-      } catch {}
-    };
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+        
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+            background: white;
+            border-radius: 20px;
+            box-shadow: 0 20px 40px rgba(0,0,0,0.1);
+            overflow: hidden;
+        }
+        
+        .header {
+            background: linear-gradient(135deg, #2c3e50 0%, #34495e 100%);
+            color: white;
+            padding: 30px;
+            text-align: center;
+        }
+        
+        .header h1 {
+            font-size: 2.5em;
+            margin-bottom: 10px;
+            font-weight: 300;
+        }
+        
+        .header p {
+            font-size: 1.2em;
+            opacity: 0.8;
+        }
+        
+        .latest-section {
+            padding: 40px;
+            text-align: center;
+            background: #f8f9fa;
+        }
+        
+        .latest-image {
+            max-width: 100%;
+            max-height: 500px;
+            border-radius: 15px;
+            box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+            margin: 20px 0;
+            transition: transform 0.3s ease;
+        }
+        
+        .latest-image:hover {
+            transform: scale(1.02);
+        }
+        
+        .no-image {
+            padding: 60px;
+            color: #6c757d;
+            font-size: 1.2em;
+        }
+        
+        .gallery-section {
+            padding: 40px;
+            background: white;
+        }
+        
+        .gallery-title {
+            font-size: 2em;
+            margin-bottom: 30px;
+            color: #2c3e50;
+            text-align: center;
+        }
+        
+        .gallery-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+            gap: 20px;
+            margin-top: 20px;
+        }
+        
+        .gallery-item {
+            background: white;
+            border-radius: 15px;
+            overflow: hidden;
+            box-shadow: 0 5px 15px rgba(0,0,0,0.1);
+            transition: transform 0.3s ease, box-shadow 0.3s ease;
+        }
+        
+        .gallery-item:hover {
+            transform: translateY(-5px);
+            box-shadow: 0 15px 30px rgba(0,0,0,0.2);
+        }
+        
+        .gallery-item img {
+            width: 100%;
+            height: 200px;
+            object-fit: cover;
+        }
+        
+        .gallery-item-info {
+            padding: 15px;
+        }
+        
+        .gallery-item-info h3 {
+            font-size: 0.9em;
+            color: #2c3e50;
+            margin-bottom: 5px;
+            word-break: break-all;
+        }
+        
+        .gallery-item-info p {
+            font-size: 0.8em;
+            color: #6c757d;
+        }
+        
+        .refresh-btn {
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            padding: 15px 30px;
+            border-radius: 25px;
+            font-size: 1.1em;
+            cursor: pointer;
+            transition: transform 0.3s ease;
+            margin: 20px 0;
+        }
+        
+        .refresh-btn:hover {
+            transform: scale(1.05);
+        }
+        
+        .status {
+            padding: 20px;
+            text-align: center;
+            font-size: 1.1em;
+            color: #28a745;
+        }
+        
+        .loading {
+            color: #6c757d;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>📸 Pi B&W Camera</h1>
+            <p>Press the button on your Pi to capture beautiful black & white images</p>
+        </div>
+        
+        <div class="latest-section">
+            <h2>Latest Capture</h2>
+            <div id="latest-container">
+                <div class="no-image">No images captured yet. Press the button on your Pi!</div>
+            </div>
+            <button class="refresh-btn" onclick="loadLatest()">🔄 Refresh</button>
+        </div>
+        
+        <div class="gallery-section">
+            <h2 class="gallery-title">Gallery</h2>
+            <button class="refresh-btn" onclick="loadGallery()">🔄 Refresh Gallery</button>
+            <div id="gallery-container">
+                <div class="loading">Loading gallery...</div>
+            </div>
+        </div>
+    </div>
 
-    function fmtBytes(n){
-      if (n == null) return "";
-      if (n < 1024) return n + " B";
-      if (n < 1024*1024) return (n/1024).toFixed(1) + " KB";
-      return (n/1024/1024).toFixed(2) + " MB";
-    }
-
-    function renderLocal(items){
-      gridLocal.innerHTML = "";
-      countLocal.textContent = `(${items.length})`;
-      for (const it of items){
-        const dt = new Date(it.mtimeMs);
-        const card = document.createElement("div");
-        card.className = "card";
-        card.innerHTML = `
-          <a href="${it.url}" target="_blank" rel="noopener">
-            <img class="thumb" loading="lazy" src="${it.url}" alt="${it.name}" />
-          </a>
-          <div class="meta">${dt.toLocaleString()} · ${fmtBytes(it.size)}</div>
-        `;
-        gridLocal.appendChild(card);
-      }
-    }
-
-    function renderArchived(items){
-      gridAr.innerHTML = "";
-      countAr.textContent = `(${items.length})`;
-      for (const it of items){
-        const when = it.uploadedAt ? new Date(it.uploadedAt).toLocaleString() : "";
-        const card = document.createElement("div");
-        card.className = "card";
-        card.innerHTML = `
-          <a href="${it.url}" target="_blank" rel="noopener">
-            <img class="thumb" loading="lazy" src="${it.url}" alt="${it.name}" />
-          </a>
-          <div class="meta">${when}${it.size ? " · " + fmtBytes(it.size) : ""}</div>
-          <a class="badge" href="${it.url}" target="_blank" rel="noopener">Arweave</a>
-        `;
-        gridAr.appendChild(card);
-      }
-    }
-
-    async function refreshGallery(){
-      try{
-        const r = await fetch("/gallery.json");
-        const data = await r.json();
-        if (!data.ok) throw new Error("Gallery failed");
-        renderLocal(data.local || []);
-        renderArchived(data.archived || []);
-      }catch(e){
-        console.error(e);
-        statusEl.textContent = "Failed to load gallery.";
-      }
-    }
-
-    (async function init(){
-      img.src = "/latest.webp?ts=" + Date.now();
-      await refreshGallery();
-    })();
-  </script>
+    <script>
+        async function loadLatest() {
+            try {
+                const response = await fetch('/latest');
+                const data = await response.json();
+                
+                const container = document.getElementById('latest-container');
+                
+                if (data.success && data.latestUrl) {
+                    container.innerHTML = `
+                        <img src="${data.latestUrl}" alt="Latest capture" class="latest-image">
+                        <p>📁 ${data.filename}</p>
+                    `;
+                } else {
+                    container.innerHTML = '<div class="no-image">No images captured yet. Press the button on your Pi!</div>';
+                }
+            } catch (error) {
+                console.error('Error loading latest:', error);
+                document.getElementById('latest-container').innerHTML = '<div class="no-image">Error loading latest image</div>';
+            }
+        }
+        
+        async function loadGallery() {
+            try {
+                const response = await fetch('/gallery');
+                const data = await response.json();
+                
+                const container = document.getElementById('gallery-container');
+                
+                if (data.success && data.images.length > 0) {
+                    const galleryHTML = data.images.map(image => `
+                        <div class="gallery-item">
+                            <img src="${image.url}" alt="${image.filename}" loading="lazy">
+                            <div class="gallery-item-info">
+                                <h3>${image.filename}</h3>
+                                <p>📅 ${new Date(image.mtime).toLocaleString()}</p>
+                                <p>📦 ${(image.size / 1024).toFixed(1)} KB</p>
+                            </div>
+                        </div>
+                    `).join('');
+                    
+                    container.innerHTML = galleryHTML;
+                } else {
+                    container.innerHTML = '<div class="no-image">No images in gallery yet</div>';
+                }
+            } catch (error) {
+                console.error('Error loading gallery:', error);
+                document.getElementById('gallery-container').innerHTML = '<div class="no-image">Error loading gallery</div>';
+            }
+        }
+        
+        // Auto-refresh every 5 seconds
+        setInterval(() => {
+            loadLatest();
+        }, 5000);
+        
+        // Load initial data
+        loadLatest();
+        loadGallery();
+    </script>
 </body>
 </html>

@@ -27,10 +27,11 @@ function captureImage() {
   console.log("Button pressed - capturing image...");
   
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-  const filename = `capture_${timestamp}.jpg`;
+  const tempFile = path.join(__dirname, `temp_${timestamp}.jpg`);
+  const filename = `capture_${timestamp}.webp`;
   const filepath = path.join(IMAGES_DIR, filename);
   
-  const cmd = `rpicam-still -o "${filepath}"`;
+  const cmd = `rpicam-still -o "${tempFile}"`;
   
   exec(cmd, (error, stdout, stderr) => {
     if (error) {
@@ -38,16 +39,31 @@ function captureImage() {
       return;
     }
     
-    console.log("Image captured:", filename);
-    console.log("File saved to:", filepath);
+    console.log("Raw image captured, processing...");
     
-    // Update latest image
-    latestImage = filename;
+    // Convert to WebP, black & white, under 100KB
+    const convertCmd = `convert "${tempFile}" -resize '1024x1024>' -colorspace Gray -auto-level -contrast-stretch 0.5%x0.5% -define webp:lossless=false -quality 80 -define webp:method=6 -define webp:target-size=100000 "${filepath}"`;
     
-    // Also copy to public as latest.jpg for easy viewing
-    const latestPath = path.join(__dirname, "public", "latest.jpg");
-    fs.copyFileSync(filepath, latestPath);
-    console.log("Latest image updated:", latestPath);
+    exec(convertCmd, (convertError, convertStdout, convertStderr) => {
+      // Clean up temp file
+      try { fs.unlinkSync(tempFile); } catch {}
+      
+      if (convertError) {
+        console.error("Convert failed:", convertError);
+        return;
+      }
+      
+      console.log("Image processed:", filename);
+      console.log("File saved to:", filepath);
+      
+      // Update latest image
+      latestImage = filename;
+      
+      // Also copy to public as latest.webp for easy viewing
+      const latestPath = path.join(__dirname, "public", "latest.webp");
+      fs.copyFileSync(filepath, latestPath);
+      console.log("Latest image updated:", latestPath);
+    });
   });
 }
 
@@ -69,12 +85,17 @@ app.get("/latest", (req, res) => {
 app.get("/gallery", (req, res) => {
   try {
     const files = fs.readdirSync(IMAGES_DIR)
-      .filter(file => file.endsWith('.jpg'))
-      .map(file => ({
-        filename: file,
-        url: `/images/${file}`,
-        mtime: fs.statSync(path.join(IMAGES_DIR, file)).mtime
-      }))
+      .filter(file => file.endsWith('.webp'))
+      .map(file => {
+        const filepath = path.join(IMAGES_DIR, file);
+        const stats = fs.statSync(filepath);
+        return {
+          filename: file,
+          url: `/images/${file}`,
+          mtime: stats.mtime,
+          size: stats.size
+        };
+      })
       .sort((a, b) => b.mtime - a.mtime);
     
     res.json({ success: true, images: files });
@@ -113,8 +134,9 @@ if (buttonOk) {
     console.log(`Web server running on http://localhost:${PORT}`);
     console.log("Press the button to capture an image!");
     console.log("View images at:");
-    console.log(`  - Latest: http://localhost:${PORT}/latest.jpg`);
-    console.log(`  - Gallery: http://localhost:${PORT}/gallery`);
+    console.log(`  - Web Interface: http://localhost:${PORT}`);
+    console.log(`  - Latest: http://localhost:${PORT}/latest.webp`);
+    console.log(`  - Gallery API: http://localhost:${PORT}/gallery`);
     console.log("Press Ctrl+C to exit");
   });
 } else {
