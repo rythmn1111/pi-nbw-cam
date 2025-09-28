@@ -12,6 +12,7 @@ const { Gpio } = require("pigpio");
 
 // ====== Waveshare 1.44" Display (SPI) ======
 const { spawn } = require("child_process");
+const ST7735SDisplay = require("./display");
 
 process.on("unhandledRejection", (reason) => {
   console.error("UNHANDLED REJECTION:", reason);
@@ -301,15 +302,26 @@ async function captureImage() {
 }
 
 // ---------- Waveshare 1.44" Display Functions ----------
+let display = null;
 let displayReady = false;
 
-function initDisplay() {
+async function initDisplay() {
   try {
-    // Waveshare 1.44" display initialization
-    // The display uses SPI interface and typically requires specific initialization
-    console.log("Waveshare 1.44\" display initialized");
-    displayReady = true;
-    return true;
+    // Initialize ST7735S display driver
+    display = new ST7735SDisplay({
+      rotation: 0,
+      spiDevice: '/dev/spidev0.0'
+    });
+    
+    const success = await display.init();
+    if (success) {
+      console.log("Waveshare 1.44\" display initialized");
+      displayReady = true;
+      return true;
+    } else {
+      displayReady = false;
+      return false;
+    }
   } catch (e) {
     console.error("Display init failed:", e.message || e);
     displayReady = false;
@@ -317,17 +329,12 @@ function initDisplay() {
   }
 }
 
-function showStatus(text) {
+async function showStatus(text) {
   console.log(`Display: ${text}`);
-  if (!displayReady) return;
+  if (!displayReady || !display) return;
   
-  // For Waveshare 1.44" display, we can use system commands to display text
-  // This is a simplified approach - in production you'd want a proper display library
   try {
-    const cmd = `echo "${text}" | figlet -f small`;
-    exec(cmd, (err, stdout) => {
-      if (!err) console.log(stdout);
-    });
+    await display.showText(text, 'small', 'white');
   } catch (e) {
     console.log(`Display: ${text}`);
   }
@@ -335,16 +342,12 @@ function showStatus(text) {
 
 function sleep(ms) { return new Promise((r) => setTimeout(r, ms)); }
 
-function showRemainingBig(n) {
+async function showRemainingBig(n) {
   console.log(`Display: Shots left: ${n}`);
-  if (!displayReady) return;
+  if (!displayReady || !display) return;
   
-  // Display large number on Waveshare 1.44" display
   try {
-    const cmd = `echo "Shots: ${n}" | figlet -f big`;
-    exec(cmd, (err, stdout) => {
-      if (!err) console.log(stdout);
-    });
+    await display.showNumber(n, 'large');
   } catch (e) {
     console.log(`Display: Shots left: ${n}`);
   }
@@ -352,7 +355,7 @@ function showRemainingBig(n) {
 
 async function showActiveCountdown(seconds = 3) {
   console.log(`Display: Countdown starting...`);
-  if (!displayReady) {
+  if (!displayReady || !display) {
     await sleep(seconds * 1000);
     return;
   }
@@ -360,10 +363,7 @@ async function showActiveCountdown(seconds = 3) {
   for (let s = seconds; s >= 1; s--) {
     console.log(`Display: ${s}`);
     try {
-      const cmd = `echo "${s}" | figlet -f big`;
-      exec(cmd, (err, stdout) => {
-        if (!err) console.log(stdout);
-      });
+      await display.showNumber(s, 'large');
     } catch (e) {
       console.log(`Display: ${s}`);
     }
@@ -371,27 +371,21 @@ async function showActiveCountdown(seconds = 3) {
   }
 }
 
-function showResult(ok, msg = "") {
+async function showResult(ok, msg = "") {
   if (ok) {
     console.log("Display: Saved ✓");
-    if (displayReady) {
+    if (displayReady && display) {
       try {
-        const cmd = `echo "SAVED ✓" | figlet -f big`;
-        exec(cmd, (err, stdout) => {
-          if (!err) console.log(stdout);
-        });
+        await display.showText("SAVED ✓", 'large', 'green');
       } catch (e) {
         console.log("Display: Saved ✓");
       }
     }
   } else {
     console.log(`Display: Error - ${msg}`);
-    if (displayReady) {
+    if (displayReady && display) {
       try {
-        const cmd = `echo "ERROR" | figlet -f big`;
-        exec(cmd, (err, stdout) => {
-          if (!err) console.log(stdout);
-        });
+        await display.showText("ERROR", 'large', 'red');
       } catch (e) {
         console.log(`Display: Error - ${msg}`);
       }
@@ -412,12 +406,12 @@ async function runCaptureWithUI(state) {
   await showActiveCountdown(3);
 
   // Processing splash
-  showStatus("Processing...");
+  await showStatus("Processing...");
   await sleep(10000);
 
   // Surface any capture error now (in the right UI place)
   if (capError) {
-    showResult(false, "Capture error");
+    await showResult(false, "Capture error");
     throw capError;
   }
 
@@ -426,12 +420,12 @@ async function runCaptureWithUI(state) {
 
   // Decrement quota & UI
   decAndPersist(state);
-  showResult(true);
+  await showResult(true);
   notifyCaptured(filename);
 
-  setTimeout(() => {
+  setTimeout(async () => {
     const fresh = readState(); ensureToday(fresh);
-    showRemainingBig(fresh.shotsRemaining);
+    await showRemainingBig(fresh.shotsRemaining);
   }, 800);
 
   return filename;
@@ -458,8 +452,8 @@ function initButtons() {
       ensureToday(state);
       
       if (!canCapture(state)) { 
-        showStatus("Limit reached"); 
-        setTimeout(() => showRemainingBig(state.shotsRemaining), 1500); 
+        await showStatus("Limit reached"); 
+        setTimeout(async () => await showRemainingBig(state.shotsRemaining), 1500); 
         return; 
       }
       
@@ -469,8 +463,8 @@ function initButtons() {
         await runCaptureWithUI(state);
       } catch (e) {
         console.error("Button capture failed:", e?.stderr || e);
-        showResult(false, "Check camera");
-        setTimeout(() => showRemainingBig(readState().shotsRemaining), 1500);
+        await showResult(false, "Check camera");
+        setTimeout(async () => await showRemainingBig(readState().shotsRemaining), 1500);
       } finally {
         isBusy = false;
       }
@@ -489,7 +483,8 @@ app.post("/capture", async (_req, res) => {
   if (isBusy) return res.status(409).json({ ok: false, error: "Busy" });
   const state = readState(); ensureToday(state);
   if (!canCapture(state)) {
-    showStatus("Limit reached"); setTimeout(() => showRemainingBig(state.shotsRemaining), 1500);
+    await showStatus("Limit reached"); 
+    setTimeout(async () => await showRemainingBig(state.shotsRemaining), 1500);
     return res.status(403).json({ ok: false, error: "Daily limit reached" });
   }
   isBusy = true;
@@ -498,8 +493,8 @@ app.post("/capture", async (_req, res) => {
     return res.json({ ok: true, url: `/latest.webp?ts=${Date.now()}`, saved: `/images/${encodeURIComponent(filename)}` });
   } catch (e) {
     console.error("Capture error:", e?.stderr || e);
-    showResult(false, "Capture failed");
-    setTimeout(() => showRemainingBig(readState().shotsRemaining), 1500);
+    await showResult(false, "Capture failed");
+    setTimeout(async () => await showRemainingBig(readState().shotsRemaining), 1500);
     return res.status(500).json({ ok: false, error: "Capture failed" });
   } finally {
     isBusy = false;
@@ -532,17 +527,22 @@ app.post("/upload/:filename", async (req, res) => {
 });
 
 // ------------- Startup -------------
-const bootState = readState(); 
-ensureToday(bootState);
-const displayOk = initDisplay();
-showRemainingBig(bootState.shotsRemaining);
-const buttonsOk = initButtons();
+async function startApp() {
+  const bootState = readState(); 
+  ensureToday(bootState);
+  
+  const displayOk = await initDisplay();
+  await showRemainingBig(bootState.shotsRemaining);
+  const buttonsOk = initButtons();
 
-app.listen(PORT, () => {
-  console.log(`Pi BnW cam listening on http://localhost:${PORT}`);
-  if (!displayOk) console.log("Waveshare 1.44\" display not available; continuing without display.");
-  if (!buttonsOk) console.log("Button not available; continuing without GPIO.");
-});
+  app.listen(PORT, () => {
+    console.log(`Pi BnW cam listening on http://localhost:${PORT}`);
+    if (!displayOk) console.log("Waveshare 1.44\" display not available; continuing without display.");
+    if (!buttonsOk) console.log("Button not available; continuing without GPIO.");
+  });
+}
+
+startApp().catch(console.error);
 
 // ------------- Cleanup -------------
 process.on("SIGINT", () => {
