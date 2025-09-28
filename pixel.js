@@ -414,6 +414,9 @@ async function runCaptureWithUI(state) {
   // Always show saved after 8 seconds, regardless of capture status
   await showResult(true);
   
+  // Reset busy state after showing saved (so user can take another photo)
+  isBusy = false;
+  
   // Now check if capture actually completed
   const filename = await capPromise; // safe now
   
@@ -469,9 +472,9 @@ function initButtons() {
         console.error("Button capture failed:", e?.stderr || e);
         await showResult(false, "Check camera");
         setTimeout(async () => await showRemainingBig(readState().shotsRemaining), 1500);
-      } finally {
-        isBusy = false;
+        isBusy = false; // Reset busy state on error
       }
+      // Note: isBusy is reset inside runCaptureWithUI after showing "Saved ✓"
     });
 
     console.log(`Button ready on GPIO ${BUTTON_GPIO} [ALERT mode].`);
