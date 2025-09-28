@@ -203,19 +203,25 @@
                 const response = await fetch('/gallery');
                 const data = await response.json();
                 
+                console.log('Gallery data:', data);
+                
                 const container = document.getElementById('gallery-container');
                 
                 if (data.success && data.images.length > 0) {
-                    const galleryHTML = data.images.map(image => `
-                        <div class="gallery-item">
-                            <img src="${image.url}" alt="${image.filename}" loading="lazy">
-                            <div class="gallery-item-info">
-                                <h3>${image.filename}</h3>
-                                <p>📅 ${new Date(image.mtime).toLocaleString()}</p>
-                                <p>📦 ${(image.size / 1024).toFixed(1)} KB</p>
+                    const galleryHTML = data.images.map(image => {
+                        console.log('Creating gallery item for:', image.url);
+                        return `
+                            <div class="gallery-item">
+                                <img src="${image.url}" alt="${image.filename}" loading="lazy" onerror="console.error('Failed to load image:', this.src)">
+                                <div class="gallery-item-info">
+                                    <h3>${image.filename}</h3>
+                                    <p>📅 ${new Date(image.mtime).toLocaleString()}</p>
+                                    <p>📦 ${(image.size / 1024).toFixed(1)} KB</p>
+                                    <p>🔗 ${image.url}</p>
+                                </div>
                             </div>
-                        </div>
-                    `).join('');
+                        `;
+                    }).join('');
                     
                     container.innerHTML = galleryHTML;
                 } else {

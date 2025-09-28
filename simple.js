@@ -14,7 +14,7 @@ const IMAGES_DIR = path.join(__dirname, "images");
 fs.mkdirSync(IMAGES_DIR, { recursive: true });
 
 // Serve static files
-app.use(express.static(IMAGES_DIR));
+app.use('/images', express.static(IMAGES_DIR));
 app.use(express.static(path.join(__dirname, "public")));
 
 // Serve latest.webp directly
@@ -101,17 +101,21 @@ app.get("/gallery", (req, res) => {
       .map(file => {
         const filepath = path.join(IMAGES_DIR, file);
         const stats = fs.statSync(filepath);
-        return {
+        const imageData = {
           filename: file,
           url: `/images/${file}`,
           mtime: stats.mtime,
           size: stats.size
         };
+        console.log('Gallery image:', imageData);
+        return imageData;
       })
       .sort((a, b) => b.mtime - a.mtime);
     
+    console.log('Gallery API returning', files.length, 'images');
     res.json({ success: true, images: files });
   } catch (error) {
+    console.error('Gallery API error:', error);
     res.json({ success: false, error: error.message });
   }
 });
