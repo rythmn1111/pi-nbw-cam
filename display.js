@@ -39,12 +39,14 @@ class ST7735SDisplay {
 
   async showText(text, size = 'small', color = 'white') {
     if (!this.initialized) return;
-    await this.runPythonDisplayScript('text', { text, size, color });
+    const fontSize = size === 'large' ? 50 : size === 'medium' ? 30 : 20;
+    await this.runPythonDisplayScript('text', { text, size: fontSize, color });
   }
 
   async showNumber(number, size = 'large') {
     if (!this.initialized) return;
-    await this.runPythonDisplayScript('number', { number, size });
+    const fontSize = size === 'large' ? 50 : size === 'medium' ? 30 : 20;
+    await this.runPythonDisplayScript('number', { number, size: fontSize, color: 'white' });
   }
 
   async showImage(imagePath) {
@@ -63,33 +65,104 @@ class ST7735SDisplay {
 import sys
 import time
 from pathlib import Path
+from PIL import Image, ImageDraw, ImageFont
 
-# Try to import the LCD144 helper
+# Try to import the ST7735 library (like your working Python code)
 try:
-    from lcd144 import LCD144
-    lcd = LCD144(rotation=0, bgr=True, invert=False, spi_hz=1000000)
+    from st7735 import ST7735
+    
+    # LCD config (tuned for Waveshare 1.44") - same as your working code
+    DC_PIN, RST_PIN, BL_PIN = 25, 27, 24
+    WIDTH, HEIGHT = 128, 128
+    OFFSET_LEFT, OFFSET_TOP = 2, 3
+    SPI_HZ = 2_000_000
+    BGR, INVERT, ROTATION = True, False, 0
+    
+    disp = ST7735(
+        port=0, cs=0, dc=DC_PIN, rst=RST_PIN, backlight=BL_PIN,
+        width=WIDTH, height=HEIGHT, rotation=ROTATION,
+        bgr=BGR, invert=INVERT, spi_speed_hz=SPI_HZ,
+        offset_left=OFFSET_LEFT, offset_top=OFFSET_TOP
+    )
+    disp.begin()
+    
+    # Font setup - get size from args
+    font_size = 40  # default
+    if len(sys.argv) > 3:
+        try:
+            font_size = int(sys.argv[3])
+        except:
+            pass
+    
+    try:
+        font = ImageFont.truetype("/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf", font_size)
+    except:
+        font = ImageFont.load_default()
+    
+    # Color setup
+    def get_color(color_name):
+        colors = {
+            'white': (255, 255, 255),
+            'black': (0, 0, 0),
+            'red': (255, 0, 0),
+            'green': (0, 255, 0),
+            'blue': (0, 0, 255),
+            'yellow': (255, 255, 0),
+            'cyan': (0, 255, 255),
+            'magenta': (255, 0, 255)
+        }
+        return colors.get(color_name, (255, 255, 255))
     
     if sys.argv[1] == 'clear':
-        lcd.show_color(0, 0, 0)  # Black screen
+        img = Image.new("RGB", (WIDTH, HEIGHT), (0, 0, 0))
+        disp.display(img)
     elif sys.argv[1] == 'text':
-        # For text display, we'll show a simple pattern
-        lcd.show_color(255, 255, 255)  # White background
+        text = sys.argv[2] if len(sys.argv) > 2 else "TEXT"
+        color_name = sys.argv[4] if len(sys.argv) > 4 else "white"
+        color = get_color(color_name)
+        
+        img = Image.new("RGB", (WIDTH, HEIGHT), (0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        
+        # Calculate text position
+        tw, th = draw.textsize(text, font=font)
+        x = (WIDTH - tw) // 2
+        y = (HEIGHT - th) // 2
+        draw.text((x, y), text, font=font, fill=color)
+        
+        disp.display(img)
     elif sys.argv[1] == 'number':
-        # Show a solid color for number display
-        lcd.show_color(0, 255, 0)  # Green for numbers
+        number = sys.argv[2] if len(sys.argv) > 2 else "0"
+        color_name = sys.argv[4] if len(sys.argv) > 4 else "white"
+        color = get_color(color_name)
+        
+        img = Image.new("RGB", (WIDTH, HEIGHT), (0, 0, 0))
+        draw = ImageDraw.Draw(img)
+        
+        # Calculate number position
+        tw, th = draw.textsize(number, font=font)
+        x = (WIDTH - tw) // 2
+        y = (HEIGHT - th) // 2
+        draw.text((x, y), number, font=font, fill=color)
+        
+        disp.display(img)
     elif sys.argv[1] == 'image':
         if len(sys.argv) > 2:
             image_path = sys.argv[2]
-            lcd.show_image(image_path)
+            img = Image.open(image_path)
+            img = img.resize((WIDTH, HEIGHT))
+            disp.display(img)
     elif sys.argv[1] == 'color':
         if len(sys.argv) > 4:
             r, g, b = int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4])
-            lcd.show_color(r, g, b)
+            img = Image.new("RGB", (WIDTH, HEIGHT), (r, g, b))
+            disp.display(img)
     
     time.sleep(0.1)  # Brief display
     
-except ImportError:
-    print("LCD144 helper not found. Display functionality unavailable.")
+except ImportError as e:
+    print(f"ST7735 library not found: {e}")
+    print("Please install: pip3 install st7735")
     sys.exit(1)
 except Exception as e:
     print(f"Display error: {e}")
@@ -97,8 +170,16 @@ except Exception as e:
 `;
 
       const args = [action];
-      if (params.text) args.push(params.text);
-      if (params.number) args.push(params.number);
+      if (params.text) {
+        args.push(params.text);
+        if (params.size) args.push(params.size);
+        if (params.color) args.push(params.color);
+      }
+      if (params.number) {
+        args.push(params.number);
+        if (params.size) args.push(params.size);
+        if (params.color) args.push(params.color);
+      }
       if (params.imagePath) args.push(params.imagePath);
       if (params.r !== undefined) args.push(params.r, params.g, params.b);
 
