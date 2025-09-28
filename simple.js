@@ -1,6 +1,6 @@
-// simple.js - Minimal camera capture with button + web frontend
+// simple.js - Minimal camera capture with button + web frontend + display
 const { Gpio } = require("pigpio");
-const { exec } = require("child_process");
+const { exec, spawn } = require("child_process");
 const path = require("path");
 const express = require("express");
 const fs = require("fs");
@@ -27,14 +27,100 @@ app.get("/latest.webp", (req, res) => {
   }
 });
 
+// Display setup
+let displayProcess = null;
+let displayReady = false;
+
+// Display functions
+async function initDisplay() {
+  try {
+    console.log('Initializing display...');
+    displayProcess = spawn('python3', [__dirname + '/display_server.py'], {
+      stdio: ['pipe', 'pipe', 'pipe']
+    });
+    
+    await new Promise((resolve, reject) => {
+      displayProcess.stdout.on('data', (data) => {
+        if (data.toString().includes('Display server ready')) {
+          resolve();
+        }
+      });
+      
+      displayProcess.stderr.on('data', (data) => {
+        reject(new Error(data.toString()));
+      });
+      
+      displayProcess.on('error', (error) => {
+        reject(error);
+      });
+      
+      setTimeout(() => reject(new Error('Display server startup timeout')), 5000);
+    });
+    
+    displayReady = true;
+    console.log('Display initialized');
+    return true;
+  } catch (error) {
+    console.error('Display initialization failed:', error);
+    displayReady = false;
+    if (displayProcess) {
+      displayProcess.kill();
+      displayProcess = null;
+    }
+    return false;
+  }
+}
+
+async function showDisplayText(text, size = 'medium', color = 'white') {
+  if (!displayReady || !displayProcess) return;
+  
+  try {
+    const command = { action: 'text', text, size, color };
+    displayProcess.stdin.write(JSON.stringify(command) + '\n');
+  } catch (e) {
+    console.log('Display text failed:', e.message);
+  }
+}
+
+async function showDisplayNumber(number, size = 'large') {
+  if (!displayReady || !displayProcess) return;
+  
+  try {
+    const command = { action: 'number', number, size, color: 'white' };
+    displayProcess.stdin.write(JSON.stringify(command) + '\n');
+  } catch (e) {
+    console.log('Display number failed:', e.message);
+  }
+}
+
+async function showCountdown(seconds) {
+  if (!displayReady) return;
+  
+  for (let i = seconds; i >= 1; i--) {
+    await showDisplayNumber(i, 'large');
+    await new Promise(resolve => setTimeout(resolve, 1000));
+  }
+}
+
 // Button setup
 const BUTTON_GPIO = 13;
 let btn = null;
 let latestImage = null;
 
-// Simple capture function
-function captureImage() {
+// Enhanced capture function with display
+async function captureImage() {
   console.log("Button pressed - capturing image...");
+  
+  // Show "READY" on display
+  await showDisplayText("READY", 'large', 'green');
+  await new Promise(resolve => setTimeout(resolve, 1000));
+  
+  // Show 10-second countdown
+  console.log("Display: Countdown starting...");
+  await showCountdown(10);
+  
+  // Show "PROCESSING" on display
+  await showDisplayText("PROCESSING", 'large', 'yellow');
   
   const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
   const tempFile = path.join(__dirname, `temp_${timestamp}.jpg`);
@@ -46,6 +132,7 @@ function captureImage() {
   exec(cmd, (error, stdout, stderr) => {
     if (error) {
       console.error("Capture failed:", error);
+      showDisplayText("ERROR", 'large', 'red');
       return;
     }
     
@@ -60,11 +147,15 @@ function captureImage() {
       
       if (convertError) {
         console.error("Convert failed:", convertError);
+        showDisplayText("ERROR", 'large', 'red');
         return;
       }
       
       console.log("Image processed:", filename);
       console.log("File saved to:", filepath);
+      
+      // Show "SAVED" on display
+      showDisplayText("SAVED ✓", 'large', 'green');
       
       // Update latest image
       latestImage = filename;
@@ -75,6 +166,11 @@ function captureImage() {
       fs.copyFileSync(filepath, latestPath);
       console.log("Latest image updated:", latestPath);
       console.log("File exists:", fs.existsSync(latestPath));
+      
+      // Show "READY" again after 2 seconds
+      setTimeout(() => {
+        showDisplayText("READY", 'large', 'green');
+      }, 2000);
     });
   });
 }
@@ -141,29 +237,49 @@ function initButton() {
 }
 
 // Startup
-console.log("Simple camera capture with web frontend starting...");
-const buttonOk = initButton();
-
-if (buttonOk) {
-  // Start web server
-  app.listen(PORT, () => {
-    console.log(`Web server running on http://localhost:${PORT}`);
-    console.log("Press the button to capture an image!");
-    console.log("View images at:");
-    console.log(`  - Web Interface: http://localhost:${PORT}`);
-    console.log(`  - Latest: http://localhost:${PORT}/latest.webp`);
-    console.log(`  - Gallery API: http://localhost:${PORT}/gallery`);
-    console.log("Press Ctrl+C to exit");
-  });
-} else {
-  console.log("Failed to initialize button");
-  process.exit(1);
+async function startApp() {
+  console.log("Simple camera capture with web frontend and display starting...");
+  
+  // Initialize display
+  const displayOk = await initDisplay();
+  if (displayOk) {
+    await showDisplayText("READY", 'large', 'green');
+  }
+  
+  // Initialize button
+  const buttonOk = initButton();
+  
+  if (buttonOk) {
+    // Start web server
+    app.listen(PORT, () => {
+      console.log(`Web server running on http://localhost:${PORT}`);
+      console.log("Press the button to capture an image!");
+      console.log("View images at:");
+      console.log(`  - Web Interface: http://localhost:${PORT}`);
+      console.log(`  - Latest: http://localhost:${PORT}/latest.webp`);
+      console.log(`  - Gallery API: http://localhost:${PORT}/gallery`);
+      if (displayOk) {
+        console.log("Display: READY");
+      } else {
+        console.log("Display: Not available");
+      }
+      console.log("Press Ctrl+C to exit");
+    });
+  } else {
+    console.log("Failed to initialize button");
+    process.exit(1);
+  }
 }
 
+startApp().catch(console.error);
+
 // Cleanup on exit
-process.on("SIGINT", () => {
+process.on("SIGINT", async () => {
   try { 
     if (btn?.disableAlert) btn.disableAlert(); 
+    if (displayProcess) {
+      displayProcess.kill();
+    }
   } catch {}
   console.log("\nBye.");
   process.exit(0);
