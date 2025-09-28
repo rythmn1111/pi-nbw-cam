@@ -545,8 +545,11 @@ async function startApp() {
 startApp().catch(console.error);
 
 // ------------- Cleanup -------------
-process.on("SIGINT", () => {
-  try { if (btn?.disableAlert) btn.disableAlert(); } catch {}
+process.on("SIGINT", async () => {
+  try { 
+    if (btn?.disableAlert) btn.disableAlert(); 
+    if (display?.cleanup) await display.cleanup();
+  } catch {}
   console.log("\nBye.");
   process.exit(0);
 });
