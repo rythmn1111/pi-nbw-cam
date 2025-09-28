@@ -298,16 +298,46 @@ function safeExec(cmd, opts = {}) {
 }
 
 async function captureImage() {
-  // Simplified capture command - faster processing
+  // Try multiple capture methods
   const tempFile = path.join(ROOT_DIR, 'temp_capture.jpg');
-  const cmd = `rpicam-still -n -t 1 -o "${tempFile}"`;
   
   console.log('Starting camera capture...');
-  await safeExec(cmd);
   
-  // Check if file was created
-  if (!fs.existsSync(tempFile)) {
-    throw new Error('Camera capture failed - no file created');
+  // Method 1: Try rpicam-still with timeout
+  try {
+    console.log('Trying rpicam-still...');
+    const cmd = `timeout 15 rpicam-still -n -t 1 -o "${tempFile}"`;
+    await safeExec(cmd);
+    
+    if (fs.existsSync(tempFile)) {
+      console.log('rpicam-still succeeded');
+    } else {
+      throw new Error('rpicam-still failed - no file created');
+    }
+  } catch (e) {
+    console.log('rpicam-still failed, trying alternative...');
+    
+    // Method 2: Try libcamera-still as fallback
+    try {
+      const cmd2 = `timeout 15 libcamera-still -n -t 1 -o "${tempFile}"`;
+      await safeExec(cmd2);
+      
+      if (!fs.existsSync(tempFile)) {
+        throw new Error('libcamera-still also failed');
+      }
+      console.log('libcamera-still succeeded');
+    } catch (e2) {
+      console.log('libcamera-still also failed, trying raspistill...');
+      
+      // Method 3: Try raspistill as last resort
+      const cmd3 = `timeout 15 raspistill -n -t 1 -o "${tempFile}"`;
+      await safeExec(cmd3);
+      
+      if (!fs.existsSync(tempFile)) {
+        throw new Error('All camera methods failed');
+      }
+      console.log('raspistill succeeded');
+    }
   }
   
   console.log('Processing image...');
@@ -434,7 +464,7 @@ async function runCaptureWithUI(state) {
   // Wait for capture to actually complete (with timeout)
   const filename = await Promise.race([
     capPromise,
-    new Promise((_, reject) => setTimeout(() => reject(new Error('Capture timeout after 60 seconds')), 60000))
+    new Promise((_, reject) => setTimeout(() => reject(new Error('Capture timeout after 30 seconds')), 30000))
   ]);
   
   if (capError) {
